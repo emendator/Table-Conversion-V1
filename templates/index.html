@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>表格转换工具</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <div class="app">
+        <!-- 头部 -->
+        <header class="header">
+            <h1>📊 表格转换工具</h1>
+            <p class="subtitle">智能匹配列名 · 自动转换格式 · 公式保留</p>
+        </header>
+
+        <!-- 步骤指示器 -->
+        <div class="steps">
+            <div class="step active" data-step="1">
+                <div class="step-dot">1</div>
+                <span>上传文件</span>
+            </div>
+            <div class="step-connector"></div>
+            <div class="step" data-step="2">
+                <div class="step-dot">2</div>
+                <span>AI匹配</span>
+            </div>
+            <div class="step-connector"></div>
+            <div class="step" data-step="3">
+                <div class="step-dot">3</div>
+                <span>预览调整</span>
+            </div>
+            <div class="step-connector"></div>
+            <div class="step" data-step="4">
+                <div class="step-dot">4</div>
+                <span>下载结果</span>
+            </div>
+        </div>
+
+        <!-- 主体内容 -->
+        <main>
+            <!-- 步骤1: 上传文件 -->
+            <section id="section-upload" class="card">
+                <h2>📤 上传文件</h2>
+                <div class="upload-grid">
+                    <!-- 原始表格上传 -->
+                    <div class="upload-box" id="source-upload">
+                        <div class="upload-zone" id="source-dropzone">
+                            <div class="upload-icon">📄</div>
+                            <p class="upload-title">原始表格（客户发来的）</p>
+                            <p class="upload-hint">拖拽文件到此处，或点击选择</p>
+                            <p class="upload-formats">支持 .xlsx / .xls</p>
+                            <input type="file" id="source-file" accept=".xlsx,.xls" hidden>
+                        </div>
+                        <div class="upload-info" id="source-info" style="display:none">
+                            <span class="file-icon">📄</span>
+                            <span class="file-name" id="source-filename"></span>
+                            <span class="file-meta" id="source-meta"></span>
+                            <button class="btn-icon" onclick="clearFile('source')" title="移除">✕</button>
+                        </div>
+                    </div>
+
+                    <!-- 参考模板上传 -->
+                    <div class="upload-box" id="reference-upload">
+                        <div class="upload-zone" id="reference-dropzone">
+                            <div class="upload-icon">📋</div>
+                            <p class="upload-title">参考模板（公司内部格式）</p>
+                            <p class="upload-hint">拖拽文件到此处，或点击选择</p>
+                            <p class="upload-formats">支持 .xlsx / .xls</p>
+                            <input type="file" id="reference-file" accept=".xlsx,.xls" hidden>
+                        </div>
+                        <div class="upload-info" id="reference-info" style="display:none">
+                            <span class="file-icon">📋</span>
+                            <span class="file-name" id="reference-filename"></span>
+                            <span class="file-meta" id="reference-meta"></span>
+                            <button class="btn-icon" onclick="clearFile('reference')" title="移除">✕</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 步骤2: AI 匹配 -->
+            <section id="section-match" class="card" style="display:none">
+                <h2>🤖 AI 智能列匹配</h2>
+                <div class="match-controls">
+                    <label class="toggle">
+                        <input type="checkbox" id="use-ai" checked>
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">使用 DeepSeek AI 匹配</span>
+                    </label>
+                    <button class="btn btn-primary" id="btn-match" onclick="runMatch()">
+                        🔍 开始匹配
+                    </button>
+                </div>
+                <div class="match-status" id="match-status"></div>
+            </section>
+
+            <!-- 步骤3: 预览与调整 -->
+            <section id="section-preview" class="card" style="display:none">
+                <h2>📝 映射预览与调整</h2>
+                <p class="section-hint">确认或调整列名映射关系，然后点击转换</p>
+
+                <div class="mapping-table-wrap">
+                    <table class="mapping-table" id="mapping-table">
+                        <thead>
+                            <tr>
+                                <th class="col-conf">匹配度</th>
+                                <th class="col-src">原始表格列名</th>
+                                <th class="col-arrow"></th>
+                                <th class="col-tgt">参考表格列名</th>
+                                <th class="col-act">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="mapping-tbody">
+                        </tbody>
+                    </table>
+                </div>
+
+                <div id="unmapped-section" style="display:none" class="unmapped-box">
+                    <h3>⚠️ 未匹配的原始列</h3>
+                    <div id="unmapped-list"></div>
+                </div>
+
+                <div class="action-bar">
+                    <button class="btn btn-primary btn-lg" id="btn-convert" onclick="runConvert()">
+                        🚀 开始转换
+                    </button>
+                </div>
+                <div class="convert-status" id="convert-status"></div>
+            </section>
+
+            <!-- 步骤4: 下载结果 -->
+            <section id="section-download" class="card" style="display:none">
+                <h2>✅ 转换完成</h2>
+                <div class="success-box">
+                    <div class="success-icon">🎉</div>
+                    <p>表格转换成功！点击下方按钮下载结果文件。</p>
+                    <a class="btn btn-success btn-lg" id="btn-download" href="#" download>
+                        📥 下载转换结果
+                    </a>
+                </div>
+                <div class="action-bar-secondary">
+                    <button class="btn btn-outline" onclick="resetAll()">🔄 转换新文件</button>
+                </div>
+            </section>
+
+            <!-- 对比预览 -->
+            <section id="section-compare" class="card" style="display:none">
+                <h2>🔍 表格内容预览</h2>
+                <div class="compare-tabs">
+                    <button class="compare-tab active" data-tab="source">📄 原始表格</button>
+                    <button class="compare-tab" data-tab="output">✅ 转换结果</button>
+                </div>
+                <div class="compare-info" id="compare-info"></div>
+                <div class="spreadsheet-container">
+                    <div class="spreadsheet-wrapper" id="spreadsheet-wrapper">
+                        <table class="spreadsheet" id="compare-spreadsheet">
+                            <thead></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <div class="spreadsheet-scroll-hint">← 左右滑动查看更多列 →</div>
+                </div>
+            </section>
+        </main>
+
+        <!-- 加载遮罩 -->
+        <div class="overlay" id="overlay" style="display:none">
+            <div class="spinner"></div>
+            <p id="overlay-text">处理中...</p>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+
+</html>
