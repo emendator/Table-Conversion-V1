@@ -50,15 +50,16 @@
                         <div class="upload-zone" id="source-dropzone">
                             <div class="upload-icon">📄</div>
                             <p class="upload-title">原始表格（客户发来的）</p>
-                            <p class="upload-hint">拖拽文件到此处，或点击选择</p>
-                            <p class="upload-formats">支持 .xlsx / .xls</p>
-                            <input type="file" id="source-file" accept=".xlsx,.xls" hidden>
+                            <p class="upload-hint">拖拽文件到此处，或点击选择（可多选）</p>
+                            <p class="upload-formats">支持 .xlsx / .xls · 可一次选择多个文件</p>
+                            <input type="file" id="source-file" accept=".xlsx,.xls" hidden multiple>
                         </div>
                         <div class="upload-info" id="source-info" style="display:none">
-                            <span class="file-icon">📄</span>
-                            <span class="file-name" id="source-filename"></span>
-                            <span class="file-meta" id="source-meta"></span>
-                            <button class="btn-icon" onclick="clearFile('source')" title="移除">✕</button>
+                            <div id="source-file-list"></div>
+                            <div class="source-actions">
+                                <button class="btn btn-sm btn-outline" onclick="addMoreSources()">➕ 添加文件</button>
+                                <button class="btn-icon" onclick="clearFile('source')" title="全部移除">✕ 清空</button>
+                            </div>
                         </div>
                     </div>
 
@@ -124,6 +125,9 @@
                 </div>
 
                 <div class="action-bar">
+                    <button class="btn btn-outline" id="btn-add-mapping" onclick="addManualMapping()">
+                        ➕ 手动添加映射
+                    </button>
                     <button class="btn btn-primary btn-lg" id="btn-convert" onclick="runConvert()">
                         🚀 开始转换
                     </button>

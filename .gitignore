@@ -2,3 +2,25 @@
 /表
 /软件开发需求文档及交付标准说明 （沟通版）.xlsx
 /输出
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 虚拟环境
+.venv/
+
+# 用户上传与输出
+/uploads
+/输出/*.xlsx
+/输出/*.xls
+
+# IDE
+.vscode/
+.idea/
+
+# 系统文件
+Thumbs.db
+.DS_Store
+*.tmp

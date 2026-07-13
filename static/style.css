@@ -253,6 +253,45 @@ body {
     color: #fff;
 }
 
+/* ---- 多文件列表 ---- */
+.source-file-summary {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text);
+    margin-bottom: 6px;
+}
+
+.source-file-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.sf-name {
+    font-weight: 500;
+    color: var(--text);
+}
+
+.sf-meta {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.source-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+#source-info {
+    flex-direction: column;
+    align-items: flex-start;
+}
+
 /* ---- 按钮 ---- */
 .btn {
     display: inline-flex;
@@ -464,7 +503,8 @@ body {
     color: #1D4ED8;
 }
 
-.target-select {
+.target-select,
+.source-select {
     padding: 6px 10px;
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -475,7 +515,8 @@ body {
     cursor: pointer;
 }
 
-.target-select:focus {
+.target-select:focus,
+.source-select:focus {
     outline: none;
     border-color: var(--primary);
 }
@@ -598,32 +639,6 @@ body {
 .overlay p {
     font-size: 14px;
     color: var(--text-secondary);
-}
-
-/* ---- 工具提示 ---- */
-.tooltip {
-    position: relative;
-}
-
-.tooltip::after {
-    content: attr(data-tip);
-    position: absolute;
-    bottom: 120%;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--text);
-    color: #fff;
-    padding: 4px 10px;
-    border-radius: 6px;
-    font-size: 12px;
-    white-space: nowrap;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity var(--transition);
-}
-
-.tooltip:hover::after {
-    opacity: 1;
 }
 
 /* ---- 电子表格预览 ---- */

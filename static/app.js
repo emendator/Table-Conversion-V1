@@ -8,6 +8,7 @@
 // ============================================================
 const state = {
     sourceReady: false,
+    sourceFiles: [],
     referenceReady: false,
     mappings: [],
     targetOptions: [],
@@ -86,10 +87,16 @@ function setupUpload(boxId, inputId, infoId, nameId, metaId, type) {
 }
 
 async function handleFile(file, type) {
+    if (type === 'source') {
+        // 多文件上传：收集所有选中的文件一起发送
+        await handleSourceFiles(Array.from($('#source-file').files));
+        return;
+    }
+
     const formData = new FormData();
     formData.append('file', file);
 
-    const endpoint = type === 'source' ? '/api/upload/source' : '/api/upload/reference';
+    const endpoint = '/api/upload/reference';
     const fileSizeMB = (file.size / 1024 / 1024).toFixed(1);
 
     showOverlay(`正在上传并解析文件 (${fileSizeMB}MB)...`);
@@ -107,19 +114,11 @@ async function handleFile(file, type) {
         }
 
         if (result.success) {
-            if (type === 'source') {
-                state.sourceReady = true;
-                $('#source-filename').textContent = result.filename;
-                $('#source-meta').textContent = `${result.rowCount} 行 · ${result.headers.length} 列`;
-                hide($('#source-dropzone'));
-                showFlex($('#source-info'));
-            } else {
-                state.referenceReady = true;
-                $('#reference-filename').textContent = result.filename;
-                $('#reference-meta').textContent = `${result.headers.length} 列 · ${result.formulaCount} 公式列`;
-                hide($('#reference-dropzone'));
-                showFlex($('#reference-info'));
-            }
+            state.referenceReady = true;
+            $('#reference-filename').textContent = result.filename;
+            $('#reference-meta').textContent = `${result.headers.length} 列 · ${result.formulaCount} 公式列`;
+            hide($('#reference-dropzone'));
+            showFlex($('#reference-info'));
             checkUploadReady();
         } else {
             alert('上传失败: ' + result.error);
@@ -131,13 +130,75 @@ async function handleFile(file, type) {
     }
 }
 
-function clearFile(type) {
+async function handleSourceFiles(files) {
+    if (!files || files.length === 0) return;
+
+    const formData = new FormData();
+    const totalSizeMB = (files.reduce((s, f) => s + f.size, 0) / 1024 / 1024).toFixed(1);
+    files.forEach(f => formData.append('files', f));
+
+    showOverlay(`正在上传并解析 ${files.length} 个文件 (${totalSizeMB}MB)...`);
+    try {
+        const res = await fetch('/api/upload/source', { method: 'POST', body: formData });
+        const text = await res.text();
+        let result;
+        try {
+            result = JSON.parse(text);
+        } catch (e) {
+            if (res.status === 413) {
+                throw new Error('文件过大，超过服务器上传限制。请压缩表格中的图片后重试。');
+            }
+            throw new Error(`服务器返回异常 (HTTP ${res.status})`);
+        }
+
+        if (result.success) {
+            state.sourceReady = true;
+            state.sourceFiles = result.files || [];
+            renderSourceFileList();
+            hide($('#source-dropzone'));
+            showFlex($('#source-info'));
+            checkUploadReady();
+        } else {
+            alert('上传失败: ' + result.error);
+        }
+    } catch (e) {
+        alert('网络错误: ' + e.message);
+    } finally {
+        hideOverlay();
+    }
+}
+
+function renderSourceFileList() {
+    const container = $('#source-file-list');
+    if (!state.sourceFiles || state.sourceFiles.length === 0) {
+        container.innerHTML = '';
+        return;
+    }
+    const totalRows = state.sourceFiles.reduce((s, f) => s + f.rows, 0);
+    container.innerHTML =
+        `<div class="source-file-summary">
+            ${state.sourceFiles.length} 个文件 · 共 ${totalRows} 行
+        </div>` +
+        state.sourceFiles.map(f =>
+            `<div class="source-file-item">
+                <span class="sf-name">📄 ${escapeHtml(f.filename || f.name)}</span>
+                <span class="sf-meta">${f.rows} 行 · ${(f.headers || []).length} 列</span>
+            </div>`
+        ).join('');
+}
+
+async function clearFile(type) {
     if (type === 'source') {
+        // 通知后端清空源文件
+        await api('/api/clear/source', { method: 'POST' });
         state.sourceReady = false;
+        state.sourceFiles = [];
         $('#source-file').value = '';
         show($('#source-dropzone'));
         hide($('#source-info'));
     } else {
+        // 通知后端清空参考文件
+        await api('/api/clear/reference', { method: 'POST' });
         state.referenceReady = false;
         $('#reference-file').value = '';
         show($('#reference-dropzone'));
@@ -158,6 +219,11 @@ function checkUploadReady() {
         show($('#section-match'));
         updateSteps(2);
     }
+}
+
+function addMoreSources() {
+    // 触发文件选择框（追加模式：后端会累积文件）
+    $('#source-file').click();
 }
 
 // ============================================================
@@ -231,10 +297,28 @@ function renderMappingTable() {
         tdConf.appendChild(badge);
         tr.appendChild(tdConf);
 
-        // 源列名
+        // 源列名（可编辑下拉，已占用的源列自动禁用）
         const tdSrc = document.createElement('td');
         tdSrc.className = 'col-src';
-        tdSrc.textContent = m.source;
+        const srcSelect = document.createElement('select');
+        srcSelect.className = 'source-select';
+        // 收集其他行已占用的源列
+        const usedSources = state.mappings
+            .filter((_, idx) => idx !== i)
+            .map(mm => mm.source);
+        srcSelect.innerHTML = state.sourceHeaders.map(h => {
+            const cleanH = (h || '').replace(/\n/g, '').trim();
+            const cleanSrc = (m.source || '').replace(/\n/g, '').trim();
+            const selected = cleanH === cleanSrc ? ' selected' : '';
+            const disabled = (cleanH !== cleanSrc && usedSources.includes(h)) ? ' disabled' : '';
+            return `<option value="${escapeHtml(h || '')}"${selected}${disabled}>${escapeHtml(h || '(空)')}</option>`;
+        }).join('');
+        srcSelect.addEventListener('change', () => {
+            state.mappings[i].source = srcSelect.value;
+            renderMappingTable();
+            renderUnmapped(getUnmappedSources());
+        });
+        tdSrc.appendChild(srcSelect);
         tr.appendChild(tdSrc);
 
         // 箭头
@@ -296,6 +380,26 @@ function renderUnmapped(unmapped) {
     list.innerHTML = unmapped.map(h =>
         `<span class="tag">${escapeHtml(h)}</span>`
     ).join('');
+}
+
+// ============================================================
+// 手动添加映射
+// ============================================================
+function addManualMapping() {
+    const unmapped = getUnmappedSources();
+    if (unmapped.length === 0) {
+        alert('所有原始列已全部映射，无需手动添加。');
+        return;
+    }
+    // 新建一条空映射，source 默认选第一个未映射的列
+    state.mappings.push({
+        source: unmapped[0],
+        target: '',
+        confidence: 'manual',
+        reason: '用户手动添加',
+    });
+    renderMappingTable();
+    renderUnmapped(getUnmappedSources());
 }
 
 // ============================================================
