@@ -52,9 +52,15 @@
 
 > ⚠️ 安装时**一定要勾选**「Add Python to PATH」！
 
-### 2. 双击安装依赖
+### 2. 双击启动
 
-在项目文件夹里找到 `启动.bat`，**双击运行**。它会自动完成环境配置并启动工具。
+在项目文件夹里找到 `启动.bat`，**双击运行**。它会自动完成以下操作：
+
+1. 检查 Python 依赖（fastapi、pandas、openpyxl 等）
+2. 检查 Node.js 前端依赖（无需手动安装）
+3. 启动后端 FastAPI 服务（端口 8004）
+4. 启动前端 React 开发服务器（端口 3002）
+5. 打开浏览器到 `http://127.0.0.1:3002`
 
 > 如果双击没反应，右键选择「以管理员身份运行」。
 
@@ -62,22 +68,25 @@
 
 ```
 ============================================================
-  📊 表格转换工具 - Web 界面
+  📊 表格转换工具 - React + FastAPI 架构
 ============================================================
-  🌐 访问地址: http://127.0.0.1:5000
+  🔧 后端 API 服务: http://127.0.0.1:8004
+  🖥️  前端界面:    http://127.0.0.1:3002
+  📖 API 文档:     http://127.0.0.1:8004/docs
+============================================================
 ```
 
-打开浏览器，在地址栏输入 `http://127.0.0.1:5000`，就能看到操作页面。
+打开浏览器，在地址栏输入 `http://127.0.0.1:3002`，就能看到操作页面。
 
 ### 4. 文件放哪里
 
 根据使用方式不同：
 
 - **🖥️ Web 界面（推荐）**：直接在页面上传即可，文件无需放入特定文件夹。
-  - 上传后文件会暂存在 `uploads/` 目录，关闭工具时自动清理。
+  - 上传后文件会暂存在 `backend/uploads/` 目录，关闭工具时自动清理。
   - 参考模板只需上传一次，后续可随时切换。
 - **⌨️ 命令行**：参考模板默认放在 `表/参考.xlsx`，原始表格可放在任意位置。
-  - 例如：`python main.py 表/参考.xlsx D:\客户文件\客户A.xlsx`
+  - 例如：`python backend/main.py 表/参考.xlsx D:\客户文件\客户A.xlsx`
   - 原始表格也可放到 `表/` 目录下统一管理。
 
 > 💡 `表/` 目录是 CLI 模式下的默认查找路径，Web 模式下文件位置不受限制。
@@ -172,10 +181,10 @@
 ### Q: 点击上传没反应？
 
 1. 刷新页面（Ctrl+F5 强制刷新）
-2. 确认终端窗口没有关闭（Flask 服务必须保持运行）
-3. 如果提示「❌ 网络错误: Failed to fetch」，说明后端 Flask 服务已停止。
+2. 确认终端窗口没有关闭（后端和前端两个服务必须保持运行）
+3. 如果提示网络错误，说明后端 FastAPI 服务已停止。
    - 重新双击 `启动.bat`
-   - 或用任务管理器杀掉所有 `python.exe` 进程后再启动
+   - 或用任务管理器杀掉所有 `python.exe` 和 `node.exe` 进程后再启动
 
 ### Q: 转换后有些列是空的？
 
@@ -191,7 +200,7 @@
 
 ### Q: 映射历史记录存在哪里？能清空吗？
 
-映射历史记录保存在项目目录下的 `映射历史记录.json` 文件中。你可以直接用记事本打开查看或编辑。如果想清空所有历史记录，删除这个文件即可。
+映射历史记录保存在 `backend/映射历史记录.json` 文件中。你可以直接用记事本打开查看或编辑。如果想清空所有历史记录，删除这个文件即可。
 
 ### Q: 关闭 AI 匹配后匹配效果好吗？
 
@@ -205,7 +214,7 @@
 
 ### 1. 修改毛利率
 
-用记事本打开 `config.py`，找到这一行：
+用记事本打开 `backend/config.py`，找到这一行：
 
 ```python
 MARGIN_RATE = 0.10  # 10%
@@ -221,7 +230,7 @@ MARGIN_RATE = 0.10  # 10%
 
 比如客户表格里经常出现「成本价」这个词，你想让它自动匹配到「新进货价」：
 
-用记事本打开 `config.py`，在 `SPECIAL_MAPPINGS` 里加一行：
+用记事本打开 `backend/config.py`，在 `SPECIAL_MAPPINGS` 里加一行：
 
 ```python
 SPECIAL_MAPPINGS = {
@@ -232,7 +241,7 @@ SPECIAL_MAPPINGS = {
 
 ### 4. 修改 DeepSeek 模型与密钥
 
-用记事本打开 `config.py`，找到开头这几行：
+用记事本打开 `backend/config.py`，找到开头这几行：
 
 ```python
 DEEPSEEK_API_KEY = "sk-xxxxxxxxxxxxxxxx"   # API 密钥
@@ -278,11 +287,11 @@ DEEPSEEK_MODEL = "deepseek-v4-flash"       # 模型名称
 
 第一次使用，AI 将「产品」匹配到「快查型号」，但你需要它匹配到「商品名称」。你手动修改后，系统会记住这个调整。下次再有「产品」列时，会自动匹配到「商品名称」。
 
-> 💡 如需清空所有历史记录，直接删除 `映射历史记录.json` 文件即可。
+> 💡 如需清空所有历史记录，直接删除 `backend/映射历史记录.json` 文件即可。
 
 ### 5. 修改图片行高
 
-如果觉得结果表格中图片太大或太小，用记事本打开 `config.py`，找到：
+如果觉得结果表格中图片太大或太小，用记事本打开 `backend/config.py`，找到：
 
 ```python
 IMAGE_ROW_HEIGHT_PT = 60    # 行高（磅），改这个数字
@@ -298,13 +307,13 @@ IMAGE_MARGIN_PT = 4         # 图片与表格边框的间距
 
 ```bash
 # 单个文件
-python main.py 表/参考.xlsx 表/客户表格.xlsx
+python backend/main.py 表/参考.xlsx 表/客户表格.xlsx
 
 # 多个文件
-python main.py 表/参考.xlsx 表/客户A.xlsx 表/客户B.xlsx
+python backend/main.py 表/参考.xlsx 表/客户A.xlsx 表/客户B.xlsx
 
 # 不用 AI（本地智能匹配）
-python main.py 表/参考.xlsx 表/客户表格.xlsx --no-ai
+python backend/main.py 表/参考.xlsx 表/客户表格.xlsx --no-ai
 ```
 
 > 💡 命令行模式适合定时任务或脚本化批量处理。
@@ -313,27 +322,74 @@ python main.py 表/参考.xlsx 表/客户表格.xlsx --no-ai
 
 ---
 
+## 架构说明（v3.0 React + FastAPI）
+
+```
+表格转换/
+├── backend/                  ← 🔧 后端 API 服务（FastAPI + uvicorn）
+│   ├── app.py                # FastAPI 主应用，提供 /api/* 纯 REST 接口
+│   ├── config.py             # 配置文件（API 密钥、路径、业务规则）
+│   ├── table_converter.py    # 核心转换逻辑
+│   ├── deepseek_matcher.py   # AI 列名匹配引擎
+│   ├── mapping_history.py    # 映射历史记录
+│   ├── main.py               # 命令行批量转换入口
+│   ├── requirements.txt      # Python 依赖（fastapi / uvicorn 等）
+│   ├── 映射历史记录.json     # 映射历史持久化文件
+│   ├── 输出/                 # 转换结果输出目录
+│   └── uploads/              # 上传临时文件（自动清理）
+├── frontend/                 ← 🖥️ 独立前端（React 19 + Vite 8）
+│   ├── src/
+│   │   ├── App.jsx           # 主应用组件（4 步骤流程）
+│   │   ├── App.css           # 完整样式表
+│   │   ├── api.js            # API 调用模块（自动管理 session）
+│   │   └── main.jsx          # React 入口
+│   ├── index.html            # 页面模板
+│   ├── vite.config.js        # Vite 配置（端口 3002 + /api 代理）
+│   └── package.json          # Node.js 依赖
+├── 表/                       # 参考模板和原始表格存放目录
+├── 启动.bat                  # 一键启动（同时启动前后端）
+├── README.md                 # 本文件
+└── 工作日报/                 # 开发工作日报
+```
+
+**技术栈**：
+
+- **后端**: Python FastAPI + uvicorn (ASGI 服务器)
+- **前端**: React 19 + Vite 8 (开发服务器)
+- **API 通信**: 前端通过 Vite proxy 代理 `/api` 请求到后端
+- **会话管理**: `X-Session-Id` 请求头（前端 localStorage 持久化）
+- **API 文档**: 自动生成于 `http://127.0.0.1:8004/docs`
+
+**端口配置**：
+
+| 服务 | 端口 | 说明 |
+|------|------|------|
+| FastAPI 后端 | 8004 | REST API + 自动文档 |
+| React 前端 (Vite) | 3002 | 开发服务器，带 HMR |
+
+---
+
 ## 文件说明
 
 | 文件 / 文件夹 | 作用 |
 |--------------|------|
-| `启动.bat` | 双击启动工具 |
-| `app.py` | Web 界面后台（上传、匹配、转换、下载） |
-| `main.py` | 命令行批量转换入口 |
-| `config.py` | 🔧 **配置文件**（API 密钥、毛利率、图片行高、特殊规则） |
-| `table_converter.py` | 核心转换逻辑（模板读取、数据映射、图片处理、公式写入） |
-| `deepseek_matcher.py` | 列名匹配引擎（AI 匹配 + 本地智能匹配 + 映射历史集成） |
-| `mapping_history.py` | 映射历史记录管理（自动保存用户手动调整，持久化存储） |
-| `templates/index.html` | 网页界面结构 |
-| `static/app.js` | 网页交互逻辑（上传、匹配、映射编辑、预览） |
-| `static/style.css` | 网页样式 |
+| `启动.bat` | 一键启动前后端服务 |
+| `backend/app.py` | 🔧 FastAPI 后端主程序（提供所有 REST API） |
+| `backend/main.py` | 命令行批量转换入口 |
+| `backend/config.py` | 🔧 **配置文件**（API 密钥、毛利率、图片行高、特殊规则） |
+| `backend/table_converter.py` | 核心转换逻辑（模板读取、数据映射、图片处理、公式写入） |
+| `backend/deepseek_matcher.py` | 列名匹配引擎（AI 匹配 + 本地智能匹配 + 映射历史集成） |
+| `backend/mapping_history.py` | 映射历史记录管理 |
+| `backend/requirements.txt` | Python 依赖列表（fastapi、uvicorn、pandas、openpyxl 等） |
+| `backend/uploads/` | 📂 上传临时文件（自动清理） |
+| `backend/输出/` | 📂 转换结果输出到这里 |
+| `frontend/src/App.jsx` | 🖥️ React 主组件（4 步流程：上传 → 匹配 → 调整 → 下载） |
+| `frontend/src/api.js` | 🖥️ API 调用模块（自动管理 `X-Session-Id` 会话） |
+| `frontend/src/App.css` | 🖥️ 网页样式 |
+| `frontend/vite.config.js` | 🖥️ Vite 配置（端口 3002 + `/api` 代理到后端 8004） |
+| `frontend/index.html` | 🖥️ 页面入口 |
 | `表/` | 📂 放参考模板和待转换的原始表格 |
-| `输出/` | 📂 转换结果输出到这里 |
-| `uploads/` | 📂 上传临时文件（自动清理） |
+| `backend/映射历史记录.json` | 📂 映射历史记录文件（自动生成，可删除重置） |
 | `工作日报/` | 📂 开发工作日报 |
-| `映射历史记录.json` | 📂 映射历史记录文件（自动生成，可删除重置） |
-| `requirements.txt` | Python 依赖列表 |
 
 ---
-
-> 📧 如有问题，联系工具维护人员。

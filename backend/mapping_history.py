@@ -24,7 +24,7 @@ import json
 from datetime import datetime
 from typing import Optional
 
-# 映射历史记录文件路径（存放在项目根目录）
+# 映射历史记录文件路径（存放在 backend/ 目录下）
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "映射历史记录.json")
 
 
@@ -196,8 +196,3 @@ def get_history_mappings_dict() -> dict:
         if src and tgt:
             result[src] = tgt
     return result
-
-
-def clear_history():
-    """清空所有历史记录"""
-    _save_records([])

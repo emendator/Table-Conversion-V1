@@ -3,9 +3,26 @@
 
 注意：表格列结构（公式列、毛利率列等）由实际上传的参考模板决定，
 不在此处硬编码。此处仅配置业务规则和API参数。
-"""
 
+路径说明：
+  BACKEND_DIR = backend/ 目录
+  BASE_DIR    = 项目根目录（backend/ 的父目录）
+"""
 import os
+
+# ============================================================
+# 路径配置
+# ============================================================
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(BACKEND_DIR)  # 项目根目录
+
+TABLE_DIR = os.path.join(BASE_DIR, "表")
+OUTPUT_DIR = os.path.join(BACKEND_DIR, "输出")
+UPLOAD_DIR = os.path.join(BACKEND_DIR, "uploads")
+
+# 确保目录存在
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ============================================================
 # DeepSeek API 配置
@@ -15,13 +32,8 @@ DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_MODEL = "deepseek-v4-flash"
 
 # ============================================================
-# 文件路径配置
-# ============================================================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TABLE_DIR = os.path.join(BASE_DIR, "表")
-OUTPUT_DIR = os.path.join(BASE_DIR, "输出")
-
 # CLI 模式默认参考模板路径（Web 界面由用户上传）
+# ============================================================
 REFERENCE_FILE = os.path.join(TABLE_DIR, "参考.xlsx")
 
 # ============================================================
