@@ -7,10 +7,29 @@ const SESSION_KEY = 'table_converter_session_id';
 const TOKEN_KEY = 'table_converter_token';
 const USER_KEY = 'table_converter_user';
 
+/**
+ * 生成会话 ID。
+ * crypto.randomUUID() 仅在安全上下文（HTTPS / localhost）可用，
+ * 生产环境用 http://IP 访问时不可用，因此提供 Math.random 兜底实现。
+ */
+function generateSessionId() {
+    try {
+        if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+            return crypto.randomUUID();
+        }
+    } catch (e) { /* 忽略，走兜底实现 */ }
+    // 兜底：基于 Math.random 的 UUID v4 格式
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === 'x' ? r : ((r & 0x3) | 0x8);
+        return v.toString(16);
+    });
+}
+
 function getSessionId() {
     let sid = localStorage.getItem(SESSION_KEY);
     if (!sid) {
-        sid = crypto.randomUUID();
+        sid = generateSessionId();
         localStorage.setItem(SESSION_KEY, sid);
     }
     return sid;
