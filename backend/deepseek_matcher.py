@@ -6,21 +6,32 @@ DeepSeek AI 智能列名匹配模块
 import json
 import re
 import requests
+import ai_config
 from config import (
-    DEEPSEEK_API_KEY,
     DEEPSEEK_API_URL,
     DEEPSEEK_MODEL,
     HEADER_MATCHING_PROMPT,
-    SPECIAL_MAPPINGS,
-    NOT_MAPPING_TO_NEW_PRICE_KEYWORDS,
 )
 from mapping_history import get_history_mappings_dict
 
 
 def call_deepseek_api(prompt: str, max_tokens: int = 8192) -> str:
-    """调用 DeepSeek API 并返回回复内容"""
+    """调用 DeepSeek API 并返回回复内容
+
+    依据官方文档（api-docs.deepseek.com）：
+    - v4 系列模型默认开启「思考模式」，此时 message.content 为空、
+      思考内容在 message.reasoning_content 中。
+    - 列名匹配任务不需要推理，必须显式设置 thinking={"type":"disabled"}
+      以关闭思考模式，保证 content 正常返回，同时响应更快、费用更低。
+
+    API Key 从 ai_config 加密存储中读取；每次调用记录 token 消耗。
+    """
+    api_key = ai_config.get_api_key()
+    if not api_key:
+        raise RuntimeError("未配置 DeepSeek API Key，请先在网页「API 设置」中填写")
+
     headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
     
@@ -33,15 +44,33 @@ def call_deepseek_api(prompt: str, max_tokens: int = 8192) -> str:
         "temperature": 0.1,
     }
     
-    # Pro 模型支持 thinking 参数
-    if 'pro' in DEEPSEEK_MODEL.lower():
+    # v4 系列：显式关闭思考模式（列名匹配无需推理，避免 content 为空）
+    if 'v4' in DEEPSEEK_MODEL.lower():
         payload["thinking"] = {"type": "disabled"}
     
     try:
         response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=120)
         response.raise_for_status()
         result = response.json()
-        content = result["choices"][0]["message"]["content"]
+
+        # 记录 token 消耗（本次匹配累计 + 该 Key 的历史总消耗）
+        usage = result.get("usage") or {}
+        _pt = int(usage.get("prompt_tokens") or 0)
+        _ct = int(usage.get("completion_tokens") or 0)
+        _tt = int(usage.get("total_tokens") or 0)
+        ai_config.add_tokens(_pt, _ct)
+        ai_config.add_match_usage(_tt)
+
+        message = result["choices"][0]["message"]
+        content = message.get("content") or ""
+        
+        # 兜底：若 content 为空但存在思考内容，尝试使用 reasoning_content
+        if not content.strip():
+            content = message.get("reasoning_content") or ""
+        
+        if not content.strip():
+            raise RuntimeError("DeepSeek API 返回内容为空（可能模型名无效或思考模式未关闭）")
+        
         return content
     except requests.exceptions.Timeout:
         raise RuntimeError("DeepSeek API 请求超时，请检查网络连接")
@@ -95,8 +124,20 @@ def normalize_header(header: str) -> str:
 
 
 def _sample_column_data(df, headers, max_samples=3):
-    """为每列抽取样本数据，格式化为可读字符串"""
+    """为每列抽取样本数据，格式化为可读字符串
+
+    优化：根据列数自适应每列样本数，控制提示词大小、加快 AI 处理。
+    列越多 → 每列样本越少，保证总样本数在可控范围内。
+    """
     import random
+    # 总样本预算：列越多单列样本越少，避免提示词过大拖慢 AI
+    if len(headers) <= 10:
+        max_samples = 3
+    elif len(headers) <= 20:
+        max_samples = 2
+    else:
+        max_samples = 1
+
     lines = []
     for h in headers:
         if h not in df.columns:
@@ -108,8 +149,8 @@ def _sample_column_data(df, headers, max_samples=3):
             continue
         # 随机抽取最多 max_samples 个值
         samples = col_data.sample(n=min(max_samples, len(col_data)), random_state=42).tolist()
-        # 截断过长的值
-        display = [str(v)[:60] for v in samples]
+        # 截断过长的值（减少 token）
+        display = [str(v)[:40] for v in samples]
         lines.append(f'  "{h}": {display}')
     return '\n'.join(lines)
 
@@ -117,66 +158,88 @@ def _sample_column_data(df, headers, max_samples=3):
 def build_matching_prompt(source_headers: list, target_headers: list,
                           source_df=None, reference_df=None, reference_headers=None,
                           formula_columns=None) -> str:
-    """构建列名匹配的提示词（含表头+数据采样）"""
-    # 公式列：从参考模板的 formula_info 中动态获取（以 = 开头的列对应的表头名）
-    if formula_columns is None:
-        formula_columns = []
-    
-    # 过滤掉目标表中的公式列
-    skip_set = set(formula_columns)
-    filtered_target = [
-        h for h in target_headers 
-        if normalize_header(h) not in skip_set
-    ]
-    
+    """构建列名匹配的提示词（含表头+数据采样）
+
+    公式列与普通列一样参与匹配（不排除）。
+    """
     # 构建源表每列数据样本
     if source_df is not None and len(source_df) > 0:
         source_samples = _sample_column_data(source_df, source_headers)
     else:
         source_samples = '\n'.join(f'  "{h}": (无样本数据)' for h in source_headers)
     
-    # 构建目标表每列数据样本（从参考模板的数据行读取）
+    # 构建目标表每列数据样本
     if reference_df is not None and reference_headers is not None and len(reference_df) > 0:
-        target_samples = _sample_column_data(reference_df, filtered_target)
+        target_samples = _sample_column_data(reference_df, target_headers)
     else:
-        target_samples = '\n'.join(f'  "{h}": (无样本数据)' for h in filtered_target)
+        target_samples = '\n'.join(f'  "{h}": (无样本数据)' for h in target_headers)
     
     return HEADER_MATCHING_PROMPT.format(
-        skip_columns=', '.join(formula_columns) if formula_columns else '无',
+        skip_columns='无',
         target_samples=target_samples,
         source_samples=source_samples,
     )
 
 
-def apply_special_mappings(source_headers: list, target_headers: list) -> list:
-    """应用特殊映射规则（硬编码规则）"""
+# ============================================================
+# 精确匹配（无任何硬编码，依据用户上传表格的实际情况）
+# ============================================================
+
+def exact_match_headers(source_headers: list, target_headers: list,
+                        formula_columns: list = None,
+                        matched_sources: set = None,
+                        matched_targets: set = None) -> list:
+    """
+    精确匹配：标准化（去换行、去空格）后列名完全相同的列直接一一对应。
+
+    不依赖任何预设规则，完全依据表格实际列名。
+    公式列与普通列一样参与匹配（不排除）。
+    已由更高级别（映射库）匹配的源列 / 目标列会被跳过。
+
+    Args:
+        source_headers: 源表列名列表
+        target_headers: 目标表列名列表
+        formula_columns: 保留参数（公式列同样参与匹配，不再排除）
+        matched_sources: 已被映射库匹配的源列（跳过）
+        matched_targets: 已被映射库匹配的目标列（跳过）
+
+    Returns:
+        [{source_column, target_column, confidence: high, reason}, ...]
+    """
+    skip_sources = set(matched_sources or [])
+    skip_targets = set(matched_targets or [])
+
+    src_norm_map = {}   # normalized -> original
+    for h in source_headers:
+        if h in skip_sources:
+            continue
+        n = _norm_header(h)
+        if n:
+            src_norm_map[n] = h
+
+    tgt_norm_map = {}
+    for h in target_headers:
+        if h in skip_targets:
+            continue
+        n = _norm_header(h)
+        if n:
+            tgt_norm_map[n] = h
+
     mappings = []
-    
-    for src_col in source_headers:
-        src_clean = str(src_col).replace('\n', '').strip()
-        
-        for keyword, target in SPECIAL_MAPPINGS.items():
-            if keyword in src_clean:
-                # 检查是否在排除列表中
-                excluded = False
-                for exclude_kw in NOT_MAPPING_TO_NEW_PRICE_KEYWORDS:
-                    if exclude_kw in src_clean:
-                        excluded = True
-                        break
-                
-                if not excluded:
-                    # 查找匹配的目标列
-                    for tgt_col in target_headers:
-                        tgt_clean = str(tgt_col).replace('\n', '').strip()
-                        if target in tgt_clean:
-                            mappings.append({
-                                "source_column": src_col,
-                                "target_column": tgt_col,
-                                "confidence": "high",
-                                "reason": f"特殊规则: 包含'{keyword}'的列映射到'{target}'"
-                            })
-                            break
-    
+    used_targets = set(skip_targets)
+    for src_norm, src_orig in src_norm_map.items():
+        if src_norm in tgt_norm_map:
+            tgt_orig = tgt_norm_map[src_norm]
+            if tgt_orig in used_targets:
+                continue
+            mappings.append({
+                "source_column": src_orig,
+                "target_column": tgt_orig,
+                "confidence": "high",
+                "reason": "列名完全相同",
+            })
+            used_targets.add(tgt_orig)
+
     return mappings
 
 
@@ -309,11 +372,6 @@ def _score_column_match(source_norm: str, target_norm: str) -> float:
     return min(sim, 1.0)
 
 
-def _get_mapped_targets(mappings: list) -> set:
-    """从映射列表中获取已被占用的目标列名集合"""
-    return {m["target_column"] for m in mappings if m.get("target_column")}
-
-
 def local_match_headers(
     source_headers: list,
     target_headers: list,
@@ -325,15 +383,16 @@ def local_match_headers(
 ) -> list:
     """
     不使用 AI 时的本地智能列名匹配。
-    
+
+    用于处理映射库 / 精确匹配之后的剩余列。
+
     策略（按优先级）：
-    1. 特殊规则（已由 match_headers 处理）
-    2. 历史映射（已由 match_headers 处理）
-    3. 精确匹配（标准化后完全相同）
-    4. 领域关键词 + 数据类型的综合评分匹配
-    5. 字符相似度兜底
-    
+    1. 精确匹配（标准化后完全相同）
+    2. 领域关键词 + 数据类型的综合评分匹配
+    3. 字符相似度兜底
+
     每个目标列只能被一个源列匹配（一一对应）。
+    已由更高级别（映射库 / 精确匹配）匹配的列通过 prematched_* 跳过。
     """
     import pandas as pd
     
@@ -350,12 +409,7 @@ def local_match_headers(
         if n:
             tgt_norm_map[n] = h
     
-    # 公式列不参与匹配
-    formula_set = set()
-    if formula_columns:
-        formula_set = set(_norm(fc) for fc in formula_columns)
-    
-    # ── 已被上级（特殊规则/历史）匹配的列不再参与 ──
+    # ── 已被上级（精确/映射库）匹配的列不再参与 ──
     result = []
     matched_sources = set(prematched_sources or [])
     matched_targets = set(prematched_targets or [])
@@ -367,9 +421,6 @@ def local_match_headers(
         if src_norm in tgt_norm_map:
             tgt_orig = tgt_norm_map[src_norm]
             if tgt_orig in matched_targets:
-                continue
-            # 跳过公式列
-            if src_norm in formula_set:
                 continue
             result.append({
                 "source_column": src_orig,
@@ -387,7 +438,7 @@ def local_match_headers(
         if tgt_orig in matched_targets:
             continue
         tgt_norm = _norm(tgt_orig)
-        if not tgt_norm or tgt_norm in formula_set:
+        if not tgt_norm:
             continue
         dtype = _infer_data_type_from_header(tgt_norm)
         # 参考表是否有数据可用于类型推断
@@ -456,33 +507,6 @@ def local_match_headers(
     return result
 
 
-def merge_mappings(special_mappings: list, ai_mappings: list) -> list:
-    """合并特殊规则映射和AI映射，特殊规则优先"""
-    merged = list(special_mappings)  # 特殊规则放前面
-    
-    # 已匹配的源列和目标列
-    matched_sources = {m["source_column"] for m in special_mappings}
-    matched_targets = {m["target_column"] for m in special_mappings}
-    
-    for m in ai_mappings:
-        src = m.get("source_column", "")
-        tgt = m.get("target_column", "")
-        
-        # 跳过已由特殊规则匹配的源列
-        if src in matched_sources:
-            continue
-        
-        # 跳过目标列为null的情况
-        if tgt is None or tgt == "null" or tgt == "":
-            continue
-        
-        merged.append(m)
-        matched_sources.add(src)
-        matched_targets.add(tgt)
-    
-    return merged
-
-
 def _norm_header(h: str) -> str:
     """标准化列名，用于匹配查找"""
     if h is None:
@@ -498,36 +522,54 @@ def _apply_history_mappings(
     matched_targets: set,
 ) -> list:
     """
-    应用历史映射记录，返回新增的映射列表。
-    历史记录的优先级介于特殊规则和 AI/本地匹配之间。
+    应用映射匹配库中的记录，返回新增的映射列表。
+
+    匹配方式（依据库中记录的实际源列名）：
+    1. 精确匹配：库中源列名与实际源列名完全相同（标准化后，忽略大小写）
+    2. 包含匹配：库中源列名是实际源列名的一部分（如库中"代发价" 匹配
+       "代发价（绿色只做集采·无代发）"），要求库中源列名 >= 3 个字符，
+       避免过短关键词误匹配（如"价"、"发"）；
+       多个候选时优先**最长**的库记录（减少"型号"误匹配"快查型号"）
+
+    注意：库中源列名可能含大小写，比较时统一 _norm_header（转小写）。
     """
+    # 统一标准化库的 key/value，避免大小写不一致导致漏匹配
+    norm_history = {}
+    for k, v in history_dict.items():
+        nk = _norm_header(k)
+        nv = _norm_header(v)
+        if nk and nv:
+            norm_history[nk] = nv
+
     result = []
-    
-    # 构建标准化目标列名查找表
-    tgt_norm_map = {}  # normalized → original
-    for h in target_headers:
-        n = _norm_header(h)
-        if n:
-            tgt_norm_map[n] = h
-    
+
     for src_orig in source_headers:
         if src_orig in matched_sources:
             continue
         src_norm = _norm_header(src_orig)
         if not src_norm:
             continue
-        
-        # 在历史记录中查找（先精确匹配列名，再尝试模糊匹配）
+
+        # 在库中查找匹配的源列记录
+        hist_key = None
         hist_tgt = None
-        for hist_src_norm, hist_tgt_norm in history_dict.items():
-            if hist_src_norm == src_norm:
-                hist_tgt = hist_tgt_norm
-                break
-        
-        if not hist_tgt:
+        # 1) 精确匹配（标准化后相同）
+        if src_norm in norm_history:
+            hist_key = src_norm
+            hist_tgt = norm_history[src_norm]
+        else:
+            # 2) 包含匹配：选择最长的库记录（>=3 字符）
+            best_len = 0
+            for hk, hv in norm_history.items():
+                if len(hk) >= 3 and hk in src_norm and len(hk) > best_len:
+                    best_len = len(hk)
+                    hist_key = hk
+                    hist_tgt = hv
+
+        if not hist_key or not hist_tgt:
             continue
-        
-        # 在目标表头中查找该目标列是否存在
+
+        # 在目标表头中查找该目标列是否存在（标准化比较）
         best_tgt = None
         for tgt_orig in target_headers:
             tgt_norm = _norm_header(tgt_orig)
@@ -538,17 +580,17 @@ def _apply_history_mappings(
                 # 优先精确匹配，不精确匹配则继续找更接近的
                 if tgt_norm == hist_tgt:
                     break
-        
+
         if best_tgt:
             result.append({
                 "source_column": src_orig,
                 "target_column": best_tgt,
                 "confidence": "high",
-                "reason": f"历史记录: 用户之前将'{src_orig}'映射到'{best_tgt}'",
+                "reason": f"映射库: 用户曾将'{hist_key}'映射到'{best_tgt}'",
             })
             matched_sources.add(src_orig)
             matched_targets.add(best_tgt)
-    
+
     return result
 
 
@@ -563,8 +605,15 @@ def match_headers(
     formula_columns=None,
 ) -> list:
     """
-    将源表列名智能匹配到目标表列名
-    
+    将源表列名智能匹配到目标表列名（无任何硬编码规则）。
+
+    匹配流程完全依据用户上传表格的实际情况：
+      第 1 步：映射匹配库 —— 用户手动确认过的映射记录（最高优先级）
+      第 2 步：精确匹配 —— 剩余列中标准化后列名完全相同的列直接一一对应
+      第 3 步：剩余列
+            - use_ai=True  → 交给 DeepSeek 大模型（语义 + 数据内容判断）
+            - use_ai=False → 本地模糊匹配（列名相似度 + 领域关键词 + 数据类型）
+
     Args:
         source_headers: 源表列名列表
         target_headers: 目标表列名列表
@@ -573,30 +622,43 @@ def match_headers(
         source_df: 源表 DataFrame（用于逐列数据采样）
         reference_df: 参考表 DataFrame（用于逐列数据采样）
         reference_headers: 参考表列名列表
-    
+
     Returns:
         映射列表 [{"source_column": ..., "target_column": ..., "confidence": ..., "reason": ...}, ...]
     """
-    # 第 0 步：加载历史映射记录（用户之前手动调整过的映射）
+    # 第 1 步：映射匹配库优先（用户手动确认过的映射，最高优先级）
     history_dict = get_history_mappings_dict()
     if history_dict:
-        print(f"  📖 加载了 {len(history_dict)} 条历史映射记录")
-    
-    # 第 1 步：应用特殊硬编码规则（优先级最高）
-    special_mappings = apply_special_mappings(source_headers, target_headers)
-    
-    # 已匹配的源列和目标列（后续步骤不得冲突）
-    matched_sources = {m["source_column"] for m in special_mappings}
-    matched_targets = {m["target_column"] for m in special_mappings}
-    
-    # 第 2 步：应用历史映射记录（优先级第二，高于 AI/本地匹配）
+        try:
+            print(f"  📖 加载了 {len(history_dict)} 条映射库记录")
+        except UnicodeEncodeError:
+            pass
     history_mappings = _apply_history_mappings(
         source_headers, target_headers, history_dict,
-        matched_sources, matched_targets,
+        set(), set(),
     )
-    
+
+    # 已匹配的源列和目标列（后续步骤不得冲突）
+    matched_sources = {m["source_column"] for m in history_mappings}
+    matched_targets = {m["target_column"] for m in history_mappings}
+
+    # 第 2 步：剩余列中，原始列与参考列完全相同的精确匹配
+    exact_mappings = exact_match_headers(
+        source_headers, target_headers,
+        formula_columns=formula_columns,
+        matched_sources=matched_sources,
+        matched_targets=matched_targets,
+    )
+    for m in exact_mappings:
+        matched_sources.add(m["source_column"])
+        matched_targets.add(m["target_column"])
+
+    # 剩余未匹配的源列 / 目标列
+    remaining_sources = [h for h in source_headers if h not in matched_sources]
+    remaining_targets = [h for h in target_headers if h not in matched_targets]
+
     if not use_ai:
-        # 使用本地智能匹配（含特殊规则 + 历史记录 + 精确匹配 + 领域关键词 + 数据类型推断）
+        # 不启用 AI：用本地模糊匹配处理剩余列（列名相似度 + 领域关键词 + 数据类型）
         local_mappings = local_match_headers(
             source_headers, target_headers,
             source_df=source_df,
@@ -605,40 +667,50 @@ def match_headers(
             prematched_sources=matched_sources,
             prematched_targets=matched_targets,
         )
-        return special_mappings + history_mappings + local_mappings
-    
-    # 第 3 步：调用AI进行智能匹配（含逐列数据采样）
-    prompt = build_matching_prompt(
-        source_headers, target_headers,
-        source_df=source_df,
-        reference_df=reference_df,
-        reference_headers=reference_headers,
-        formula_columns=formula_columns,
-    )
-    
-    try:
-        response = call_deepseek_api(prompt, max_tokens=8192)
-        ai_result = extract_json_from_response(response)
-        ai_mappings = ai_result.get("mappings", [])
-        
-        # 打印AI的匹配说明
-        notes = ai_result.get("notes", "")
-        if notes:
-            try:
-                print(f"  AI匹配说明: {notes}")
-            except UnicodeEncodeError:
-                print(f"  AI 匹配说明: 成功")
-        
-    except Exception as e:
+        return history_mappings + exact_mappings + local_mappings
+
+    # 第 3 步：只将剩余列交给 AI（映射库越用越全，AI 处理越少、等待越短）
+    ai_mappings = []
+    if remaining_sources and remaining_targets:
         try:
-            print(f"  ! AI匹配失败: {e}")
+            try:
+                print(f"  🤖 AI 需处理 {len(remaining_sources)} 列（已精确/库匹配 {len(matched_sources)} 列）")
+            except UnicodeEncodeError:
+                pass
+            prompt = build_matching_prompt(
+                remaining_sources, remaining_targets,
+                source_df=source_df,
+                reference_df=reference_df,
+                reference_headers=reference_headers,
+                formula_columns=formula_columns,
+            )
+            # 动态 max_tokens：剩余列少 → 让模型少生成，大幅缩短等待时间
+            dynamic_tokens = max(512, min(4096, len(remaining_sources) * 200 + 256))
+            response = call_deepseek_api(prompt, max_tokens=dynamic_tokens)
+            ai_result = extract_json_from_response(response)
+            ai_mappings = ai_result.get("mappings", [])
+
+            notes = ai_result.get("notes", "")
+            if notes:
+                try:
+                    print(f"  AI匹配说明: {notes}")
+                except UnicodeEncodeError:
+                    pass
+
+        except Exception as e:
+            try:
+                print(f"  ! AI匹配失败: {e}")
+            except UnicodeEncodeError:
+                pass
+            print("  将降级使用本地匹配")
+            ai_mappings = []
+    else:
+        try:
+            print("  ✅ 所有列均已匹配，无需调用 AI")
         except UnicodeEncodeError:
-            print(f"  ! AI 匹配失败")
-        print(f"  将降级使用本地匹配")
-        ai_mappings = []
-    
-    # 第 4 步：合并结果（去重，历史记录和特殊规则优先）
-    # 从 ai_mappings 中过滤掉已被特殊规则或历史记录匹配的列
+            pass
+
+    # 从 AI 结果中过滤已被精确/库匹配的列，并清理无效映射
     filtered_ai = []
     for m in ai_mappings:
         src = m.get("source_column", "")
@@ -652,10 +724,21 @@ def match_headers(
         filtered_ai.append(m)
         matched_sources.add(src)
         matched_targets.add(tgt)
-    
-    final_mappings = special_mappings + history_mappings + filtered_ai
-    
-    return final_mappings
+
+    # AI 结果不足时（返回空/失败/只匹配部分），用本地模糊匹配兜底剩余列
+    remaining_after_ai = [h for h in remaining_sources if h not in matched_sources]
+    if remaining_after_ai:
+        fallback = local_match_headers(
+            source_headers, target_headers,
+            source_df=source_df,
+            reference_df=reference_df,
+            formula_columns=formula_columns,
+            prematched_sources=matched_sources,
+            prematched_targets=matched_targets,
+        )
+        filtered_ai.extend(fallback)
+
+    return history_mappings + exact_mappings + filtered_ai
 
 
 if __name__ == "__main__":

@@ -13,7 +13,6 @@ import re
 import io
 import zipfile
 from copy import copy
-from typing import Optional
 
 try:
     from lxml import etree as _lxml_etree
@@ -22,13 +21,9 @@ except ImportError:
     _HAS_LXML = False
 
 from config import (
-    REFERENCE_FILE,
-    OUTPUT_DIR,
-    MARGIN_RATE,
     IMAGE_ROW_HEIGHT_PT,
     IMAGE_MARGIN_PT,
 )
-from deepseek_matcher import match_headers
 
 
 def get_formula_headers(template: dict) -> list:
@@ -50,6 +45,90 @@ def normalize_header(header: str) -> str:
     if pd.isna(header):
         return ""
     return str(header).replace('\n', '').replace('\r', '').strip()
+
+
+def dedupe_headers(headers: list) -> list:
+    """
+    将重复列名按其在表格中的先后顺序编号区分。
+
+    例如：["金额", "金额", "金额"] → ["金额", "金额(2)", "金额(3)"]
+
+    规则：
+    - 第一个出现的列名保持原名
+    - 后续重复列名追加编号 "(n)"（n 从 2 开始）
+    - 若编号后的名字恰好与已有列名冲突（如用户原本就有 "金额(2)"），
+      则继续递增编号，保证最终列名唯一
+    """
+    counts = {}
+    used = set()
+    result = []
+    for h in headers:
+        if h not in used:
+            counts[h] = 1
+            used.add(h)
+            result.append(h)
+        else:
+            counts[h] += 1
+            n = counts[h]
+            candidate = f"{h}({n})"
+            # 若候选名已被占用，继续递增
+            while candidate in used:
+                n += 1
+                candidate = f"{h}({n})"
+            used.add(candidate)
+            result.append(candidate)
+    return result
+
+
+def _scan_formula_cells(ws, header_row_idx: int, max_rows: int = 8) -> dict:
+    """
+    扫描工作表中表头之后若干行的单元格，识别公式列。
+
+    准确识别方式：只要某列在表头之后的任意一行中出现以 "=" 开头的公式，
+    就认定该列为公式列（公式可能只出现在部分行）。
+
+    Args:
+        ws: openpyxl worksheet
+        header_row_idx: 表头行号（1-based）
+        max_rows: 扫描的最大数据行数
+
+    Returns:
+        {col_letter: formula_string}  每个公式列取第一个发现的公式
+    """
+    formula_info = {}
+    start_row = header_row_idx + 1
+    end_row = min(start_row + max_rows, ws.max_row + 1)
+    for row_idx in range(start_row, end_row):
+        for col_idx in range(1, ws.max_column + 1):
+            cell = ws.cell(row=row_idx, column=col_idx)
+            value = cell.value
+            if value is not None and isinstance(value, str) and value.strip().startswith('='):
+                col_letter = get_column_letter(col_idx)
+                if col_letter not in formula_info:
+                    formula_info[col_letter] = value.strip()
+    return formula_info
+
+
+def detect_source_formulas(file_path: str, header_row: int = 0) -> dict:
+    """
+    识别原始表格中的公式列（用 openpyxl 读取以保留公式）。
+
+    Args:
+        file_path: 原始表格文件路径
+        header_row: 表头行号（0-based，与 read_source_file 返回一致）
+
+    Returns:
+        {col_letter: formula_string}  源表公式列：列字母 → 公式
+    """
+    try:
+        wb = openpyxl.load_workbook(file_path, data_only=False)
+        ws = wb.active
+        header_row_idx = header_row + 1  # 0-based → 1-based
+        formula_info = _scan_formula_cells(ws, header_row_idx)
+        wb.close()
+        return formula_info
+    except Exception:
+        return {}
 
 
 def read_reference_template(file_path: str):
@@ -78,28 +157,16 @@ def read_reference_template(file_path: str):
     for col_idx in range(1, ws.max_column + 1):
         cell = ws.cell(row=header_row_idx, column=col_idx)
         headers.append(normalize_header(str(cell.value) if cell.value is not None else ""))
+    # 相同列名按先后顺序编号区分：金额, 金额(2), 金额(3)...
+    # raw_headers 保留原始表头（写输出文件时用，不编号）
+    raw_headers = list(headers)
+    headers = dedupe_headers(headers)
     
-    # 读取第二行（数据示例行）的公式和固定值
-    formula_info = {}       # 公式列: col_letter → formula_string
-    fixed_values = {}       # 固定值列: col_letter → value (非公式、非None)
+    # 扫描表头之后的若干行，准确识别公式列（公式可能只出现在部分行）
+    formula_info = _scan_formula_cells(ws, header_row_idx)   # 公式列: col_letter → formula_string
+
+    # 数据行号：表头下一行（用于读取数据行样式）
     data_row_idx = header_row_idx + 1
-    for col_idx in range(1, ws.max_column + 1):
-        cell = ws.cell(row=data_row_idx, column=col_idx)
-        col_letter = get_column_letter(col_idx)
-        if cell.value is not None:
-            val_str = str(cell.value)
-            if val_str.startswith('='):
-                formula_info[col_letter] = val_str
-            else:
-                fixed_values[col_letter] = cell.value
-    
-    # 分析公式引用了哪些列（用于确定哪些固定值是公式依赖的）
-    formula_dependencies = set()
-    for formula in formula_info.values():
-        # 提取公式中的列引用，如 L2, AF2, N2 等
-        refs = re.findall(r'([A-Z]+)(\d+)', formula)
-        for col_letter, row_num in refs:
-            formula_dependencies.add(col_letter)
     
     # 读取列宽
     column_widths = {}
@@ -137,10 +204,9 @@ def read_reference_template(file_path: str):
     
     return {
         'headers': headers,
+        'raw_headers': raw_headers,   # 原始表头（未编号，用于输出文件）
         'header_row_idx': header_row_idx,
         'formula_info': formula_info,
-        'fixed_values': fixed_values,
-        'formula_dependencies': formula_dependencies,
         'column_widths': column_widths,
         'header_styles': header_styles,
         'data_styles': data_styles,
@@ -151,6 +217,8 @@ def read_reference_template(file_path: str):
 def read_source_file(file_path: str):
     """
     读取原始表格文件，自动处理表头行
+
+    相同列名按先后顺序编号区分：金额, 金额(2), 金额(3)...
     
     Returns:
         tuple: (DataFrame, headers_list, header_row)
@@ -168,11 +236,18 @@ def read_source_file(file_path: str):
             header_row = i
             break
     
+    # 从原始数据行读取真实列名（pandas 会自动给重复列加 .1 后缀，需还原）
+    raw_headers = []
+    for v in df_raw.iloc[header_row].tolist():
+        raw_headers.append(normalize_header(str(v) if v is not None and not pd.isna(v) else ""))
+    # 相同列名按先后顺序编号区分：金额, 金额(2), 金额(3)...
+    headers = dedupe_headers(raw_headers)
+
     # 使用找到的表头行重新读取
     df = pd.read_excel(file_path, header=header_row, dtype=object)
     
-    # 清理列名
-    df.columns = [normalize_header(c) for c in df.columns]
+    # 用去重编号后的列名覆盖（pandas 的 .1 后缀列名与之可能不一致）
+    df.columns = headers[:df.shape[1]]
     
     # 删除全空行
     df = df.dropna(how='all')
@@ -180,27 +255,7 @@ def read_source_file(file_path: str):
     # 重置索引
     df = df.reset_index(drop=True)
     
-    headers = [normalize_header(c) for c in df.columns]
-    
     return df, headers, header_row
-
-
-def find_target_column(target_headers: list, target_col_name: str) -> Optional[int]:
-    """在目标表头列表中查找匹配的列索引"""
-    target_clean = normalize_header(target_col_name)
-    
-    # 首先精确匹配
-    for idx, h in enumerate(target_headers):
-        if normalize_header(h) == target_clean:
-            return idx
-    
-    # 模糊匹配：目标列名包含在表头中
-    for idx, h in enumerate(target_headers):
-        h_clean = normalize_header(h)
-        if target_clean in h_clean or h_clean in target_clean:
-            return idx
-    
-    return None
 
 
 def _build_raw_to_df_map(source_path: str, header_row: int) -> dict:
@@ -233,6 +288,141 @@ def _parse_drawing_rel_path(drawing_xml_path: str) -> str:
     parts = drawing_xml_path.split('/')
     # xl/drawings/drawing1.xml → xl/drawings/_rels/drawing1.xml.rels
     return '/'.join(parts[:-1]) + '/_rels/' + parts[-1] + '.rels'
+
+
+def _extract_richdata_images(z, all_names, header_row, raw_to_df) -> dict:
+    """从 Excel richData（富数据）机制中提取嵌入图片。
+
+    Office 365「单元格内图片」使用 richData 机制（xl/richData/），
+    与传统 drawings（浮动图片）/ cellImages（DISPIMG）不同：
+    - 单元格带 vm 属性（value metadata 索引）
+    - vm → metadata.xml valueMetadata → futureMetadata → rdrichvalue.xml rv
+    - rv 的 LocalImageIdentifier → richValueRel.xml 中 rel 顺序 →
+      richValueRel.xml.rels → media 图片文件
+
+    Args:
+        z: 已打开的 zipfile 对象
+        all_names: zip 内所有文件名集合
+        header_row: 表头行号（0-based）
+        raw_to_df: 原始行号 → DataFrame 行索引映射
+
+    Returns:
+        {(df_row_idx, col_idx): image_bytes}
+    """
+    images_map = {}
+    try:
+        # 1) richValueRel.xml：rel 顺序（0-based 索引 → rId）
+        rvr_name = None
+        for n in all_names:
+            if n.lower().endswith('richvaluerel.xml') and '/_rels/' not in n:
+                rvr_name = n
+                break
+        if not rvr_name:
+            return images_map
+        rvr_xml = z.read(rvr_name).decode('utf-8')
+        rel_ids = re.findall(r'r:id="(rId\d+)"', rvr_xml)
+
+        # 2) richValueRel.xml.rels：rId → media 文件
+        rv_rels_name = None
+        for n in all_names:
+            if n.lower().endswith('richvaluerel.xml.rels'):
+                rv_rels_name = n
+                break
+        if not rv_rels_name:
+            return images_map
+        rid_to_file = {}
+        rels_xml = z.read(rv_rels_name).decode('utf-8')
+        for m in re.finditer(r'Id="(rId\d+)"[^>]*Target="([^"]+)"', rels_xml):
+            target = m.group(2).replace('\\', '/')
+            if target.startswith('../'):
+                target = 'xl/' + target[3:]
+            elif target.startswith('/'):
+                target = target.lstrip('/')
+            elif not target.startswith('xl/'):
+                target = 'xl/' + target
+            rid_to_file[m.group(1)] = target
+
+        # 3) metadata.xml：valueMetadata rc v + futureMetadata rvb i
+        meta_xml = ''
+        if 'xl/metadata.xml' in all_names:
+            meta_xml = z.read('xl/metadata.xml').decode('utf-8')
+        vm_match = re.search(r'<valueMetadata[^>]*>(.*?)</valueMetadata>', meta_xml, re.DOTALL)
+        valmeta = re.findall(r'<rc\b[^>]*v="(\d+)"', vm_match.group(1)) if vm_match else []
+        fm_match = re.search(r'<futureMetadata\b[^>]*>(.*?)</futureMetadata>', meta_xml, re.DOTALL)
+        rvb = re.findall(r'rvb\s+i="(\d+)"', fm_match.group(1)) if fm_match else []
+        if not valmeta or not rvb:
+            return images_map
+
+        # 4) rdrichvalue.xml：rv 的 LocalImageIdentifier（第一个 v）
+        rv_ids = []
+        rv_xml_name = None
+        for n in all_names:
+            if n.lower().endswith('rdrichvalue.xml') and '/_rels/' not in n:
+                rv_xml_name = n
+                break
+        if not rv_xml_name:
+            return images_map
+        rv_xml = z.read(rv_xml_name).decode('utf-8')
+        for m in re.finditer(r'<rv\b[^>]*>(.*?)</rv>', rv_xml, re.DOTALL):
+            vals = re.findall(r'<v>([^<]*)</v>', m.group(1))
+            if vals and vals[0].strip().isdigit():
+                rv_ids.append(int(vals[0]))
+
+        # 5) 遍历所有 sheet，找带 vm 属性的单元格
+        for n in sorted(all_names):
+            if not re.match(r'xl/worksheets/sheet\d+\.xml$', n):
+                continue
+            sheet_xml = z.read(n).decode('utf-8')
+            for m in re.finditer(r'<c r="([A-Z]+\d+)"[^>]*?vm="(\d+)"', sheet_xml):
+                cell_ref = m.group(1)
+                vm = int(m.group(2))
+                if vm >= len(valmeta):
+                    continue
+                fm_idx = int(valmeta[vm])
+                if fm_idx >= len(rvb):
+                    continue
+                rv_idx = int(rvb[fm_idx])
+                if rv_idx >= len(rv_ids):
+                    continue
+                lid = rv_ids[rv_idx]
+                if lid >= len(rel_ids):
+                    continue
+                rid = rel_ids[lid]
+                media_path = rid_to_file.get(rid, '')
+                if not media_path or media_path not in all_names:
+                    continue
+
+                # 解析单元格位置 → (df_row_idx, col_idx)
+                col_match = re.match(r'([A-Z]+)(\d+)', cell_ref)
+                if not col_match:
+                    continue
+                col_letter = col_match.group(1)
+                row_num = int(col_match.group(2))
+                col_idx = 0
+                for ch in col_letter:
+                    col_idx = col_idx * 26 + (ord(ch) - 64)
+                col_idx -= 1  # 0-based
+                raw_row = row_num - 1  # 0-based 原始行号
+
+                df_row_idx = raw_to_df.get(raw_row)
+                if df_row_idx is None:
+                    if raw_row > header_row:
+                        df_row_idx = raw_row - header_row - 1
+                    else:
+                        continue
+
+                try:
+                    img_data = z.read(media_path)
+                    if len(img_data) <= 50:
+                        continue
+                    key = (df_row_idx, col_idx)
+                    if key not in images_map:
+                        images_map[key] = img_data
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return images_map
 
 
 def extract_images_from_source(source_path: str, header_row: int = None) -> dict:
@@ -304,11 +494,21 @@ def extract_images_from_source(source_path: str, header_row: int = None) -> dict
                     if name.lower().endswith('cellimages.xml') and 'rels' not in name.lower():
                         try:
                             ci_xml = z.read(name).decode('utf-8')
-                            for m in re.finditer(
-                                r'<xdr:cNvPr[^>]*name="(ID_[^"]+)"[^>]*>.*?<a:blip r:embed="(rId\d+)"',
-                                ci_xml, re.DOTALL
-                            ):
-                                guid_to_rid[m.group(1)] = m.group(2)
+                            # 按 <xdr:pic>...</xdr:pic> 块解析，块内取 name 与 r:embed，
+                            # 兼容属性顺序、空白、子元素顺序变化（比整文档宽松匹配更稳健）
+                            for blk in re.finditer(r'<xdr:pic\b.*?</xdr:pic>', ci_xml, re.DOTALL):
+                                block = blk.group(0)
+                                nm = re.search(r'name="(ID_[^"]+)"', block)
+                                emb = re.search(r'r:embed="(rId\d+)"', block)
+                                if nm and emb:
+                                    guid_to_rid[nm.group(1)] = emb.group(1)
+                            # 兜底：块解析失败时退回旧的宽松匹配
+                            if not guid_to_rid:
+                                for m in re.finditer(
+                                    r'<xdr:cNvPr[^>]*name="(ID_[^"]+)"[^>]*>.*?<a:blip r:embed="(rId\d+)"',
+                                    ci_xml, re.DOTALL
+                                ):
+                                    guid_to_rid[m.group(1)] = m.group(2)
                         except Exception:
                             pass
                         break
@@ -436,14 +636,27 @@ def extract_images_from_source(source_path: str, header_row: int = None) -> dict
                         if embed_id is None or embed_id not in rid_to_target:
                             continue
                         
-                        # ── 解析媒体文件路径 ──
-                        media_target = rid_to_target[embed_id]
-                        if media_target.startswith('../'):
+                        # ── 解析媒体文件路径（兼容多种相对/绝对写法）──
+                        media_target = rid_to_target[embed_id].replace('\\', '/')
+                        if media_target.startswith('/'):
+                            # /xl/media/image1.png → xl/media/image1.png
+                            media_path = media_target.lstrip('/')
+                        elif media_target.startswith('../'):
                             # ../media/image1.png → xl/media/image1.png
                             media_path = 'xl/' + media_target[3:]
+                        elif media_target.startswith('media/'):
+                            media_path = 'xl/' + media_target
+                        elif not media_target.startswith('xl/'):
+                            # 相对 drawings 目录的 target（如 image1.png → xl/drawings/image1.png）
+                            media_path = 'xl/drawings/' + media_target
                         else:
                             media_path = media_target
-                        
+
+                        # 仅保留常见图片格式，跳过图表/其他关系
+                        if not media_path.lower().endswith(
+                                ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif',
+                                 '.svg', '.emf', '.wmf', '.webp', '.avif', '.ico')):
+                            continue
                         if media_path not in all_names:
                             continue
                         
@@ -548,447 +761,19 @@ def extract_images_from_source(source_path: str, header_row: int = None) -> dict
                                     continue
                     except Exception:
                         continue
+            
+            # ============================================================
+            # 方式3: richData 格式（Office 365「单元格内图片」富数据）
+            # 图片通过 xl/richData/richValueRel.xml + rdrichvalue.xml + metadata.xml
+            # 与带 vm 属性的单元格关联，区别于传统 drawings / cellImages。
+            # ============================================================
+            richdata_images = _extract_richdata_images(z, all_names, header_row, raw_to_df)
+            for k, v in richdata_images.items():
+                if k not in images_map:
+                    images_map[k] = v
     
     except Exception:
         pass
     
     return images_map
 
-
-def convert_table(
-    source_file: str,
-    reference_file: str = REFERENCE_FILE,
-    output_file: Optional[str] = None,
-    use_ai: bool = True,
-    verbose: bool = True,
-) -> str:
-    """
-    将原始表格转换为参考表格格式
-    
-    Args:
-        source_file: 原始表格文件路径
-        reference_file: 参考表格（模板）文件路径
-        output_file: 输出文件路径（可选，默认自动生成）
-        use_ai: 是否使用AI进行列匹配
-        verbose: 是否打印详细信息
-    
-    Returns:
-        str: 输出文件路径
-    """
-    source_name = os.path.splitext(os.path.basename(source_file))[0]
-    
-    if verbose:
-        print(f"\n{'='*60}")
-        print(f"📄 处理文件: {source_name}")
-        print(f"{'='*60}")
-    
-    # ========== 第一步：读取参考模板 ==========
-    if verbose:
-        print("  读取参考模板...")
-    template = read_reference_template(reference_file)
-    target_headers = template['headers']
-    formula_info = template['formula_info']
-    fixed_values = template['fixed_values']
-    formula_deps = template['formula_dependencies']
-    
-    if verbose:
-        print(f"  参考模板: {len(target_headers)} 列, {len(formula_info)} 个公式列, {len(fixed_values)} 个固定值列")
-    
-    # ========== 第二步：读取原始表格 ==========
-    if verbose:
-        print("  读取原始表格...")
-    source_df, source_headers, source_header_row = read_source_file(source_file)
-    
-    if verbose:
-        print(f"  原始表格: {len(source_df)} 行, {len(source_headers)} 列")
-        print(f"  原始列名: {source_headers}")
-    
-    # 检查是否两表列数相同且列名相似 → 可能已是参考格式
-    same_format = (
-        len(source_headers) == len(target_headers) and
-        sum(1 for sh in source_headers if any(
-            normalize_header(sh) == normalize_header(th) for th in target_headers
-        )) >= len(source_headers) * 0.7  # 70%列名匹配
-    )
-    
-    if same_format and verbose:
-        print("  ℹ 检测到原始表格与参考格式高度相似，将直接复制数据并填充公式列")
-    
-    # ========== 第三步：列名匹配 ==========
-    if same_format:
-        # 已是相同格式，直接按位置一一对应
-        column_mapping = {}
-        for i, sh in enumerate(source_headers):
-            if i < len(target_headers):
-                column_mapping[sh] = i
-    else:
-        if verbose:
-            print("  🤖 调用DeepSeek AI进行列名智能匹配...")
-        
-        # 读取参考模板数据用于AI列采样
-        ref_df = None
-        try:
-            ref_df = pd.read_excel(reference_file, header=0, dtype=object)
-            ref_df = ref_df.dropna(how='all').reset_index(drop=True)
-        except Exception:
-            pass
-        
-        # 执行匹配（含逐列数据采样对比）
-        formula_headers = get_formula_headers(template)
-        mappings = match_headers(
-            source_headers=source_headers,
-            target_headers=target_headers,
-            use_ai=use_ai,
-            source_df=source_df,
-            reference_df=ref_df,
-            reference_headers=target_headers,
-            formula_columns=formula_headers,
-        )
-        
-        if verbose:
-            print(f"\n  匹配结果 ({len(mappings)} 项):")
-            for m in mappings:
-                conf_icon = {"high": "✅", "medium": "⚠️", "low": "❓"}.get(m['confidence'], '  ')
-                print(f"    {conf_icon} [{m['confidence']}] {m['source_column']} → {m['target_column']}")
-                if 'reason' in m and m['reason']:
-                    print(f"       理由: {m['reason']}")
-        
-        # 构建列映射：源列索引 → 目标列索引
-        column_mapping = {}
-        for m in mappings:
-            src_col = m['source_column']
-            tgt_col = m['target_column']
-            
-            # 查找源列索引
-            src_idx = None
-            for i, h in enumerate(source_headers):
-                if normalize_header(h) == normalize_header(src_col):
-                    src_idx = i
-                    break
-            
-            # 查找目标列索引
-            tgt_idx = find_target_column(target_headers, tgt_col)
-            
-            if src_idx is not None and tgt_idx is not None:
-                column_mapping[src_col] = tgt_idx
-    
-    # 打印列映射详情
-    if verbose:
-        print(f"\n  最终列映射 ({len(column_mapping)} 项):")
-        for src_col, tgt_idx in column_mapping.items():
-            if tgt_idx < len(target_headers):
-                print(f"    {src_col} → [{tgt_idx}] {target_headers[tgt_idx]}")
-    
-    # ========== 第四步：构建输出工作簿 ==========
-    if verbose:
-        print("\n  📝 生成输出文件...")
-    
-    # 创建输出工作簿
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Sheet1"
-    
-    num_target_cols = template['max_column']
-    
-    # 动态检测毛利率列（根据参考模板表头，含"毛利率"的列）
-    margin_columns = []
-    for idx, h in enumerate(target_headers):
-        if '毛利率' in normalize_header(h):
-            margin_columns.append(get_column_letter(idx + 1))
-    
-    # ========== 第五步：写入表头 ==========
-    for col_idx in range(1, num_target_cols + 1):
-        cell = ws.cell(row=1, column=col_idx)
-        cell.value = target_headers[col_idx - 1]
-        
-        # 应用表头样式
-        col_letter = get_column_letter(col_idx)
-        if col_letter in template['header_styles']:
-            styles = template['header_styles'][col_letter]
-            if styles.get('font'):
-                cell.font = styles['font']
-            if styles.get('alignment'):
-                cell.alignment = styles['alignment']
-            if styles.get('fill'):
-                cell.fill = styles['fill']
-            if styles.get('border'):
-                cell.border = styles['border']
-    
-    # ========== 第六步：写入数据行 ==========
-    num_written = 0
-    for src_row_idx in range(len(source_df)):
-        output_row = src_row_idx + 2  # 从第2行开始（第1行是表头）
-        
-        # --- 第一遍：先写入源数据映射的值 ---
-        for col_idx in range(1, num_target_cols + 1):
-            cell = ws.cell(row=output_row, column=col_idx)
-            col_letter = get_column_letter(col_idx)
-            
-            # 应用数据样式
-            if col_letter in template['data_styles']:
-                styles = template['data_styles'][col_letter]
-                if styles.get('font'):
-                    cell.font = styles['font']
-                if styles.get('alignment'):
-                    cell.alignment = styles['alignment']
-                if styles.get('fill'):
-                    cell.fill = styles['fill']
-                if styles.get('border'):
-                    cell.border = styles['border']
-                if styles.get('number_format'):
-                    cell.number_format = styles['number_format']
-            
-            # 查找此目标列是否有对应的源列映射
-            src_col_idx = None
-            for src_col_name, tgt_idx in column_mapping.items():
-                if tgt_idx == col_idx - 1:  # col_idx is 1-based, tgt_idx is 0-based
-                    for i, h in enumerate(source_headers):
-                        if normalize_header(h) == normalize_header(src_col_name):
-                            src_col_idx = i
-                            break
-                    break
-            
-            if src_col_idx is not None and src_col_idx < len(source_df.columns):
-                val = source_df.iloc[src_row_idx, src_col_idx]
-                if pd.notna(val):
-                    val_str = str(val)
-                    # 跳过图片的DISPIMG公式
-                    if val_str.startswith('=DISPIMG'):
-                        cell.value = None
-                    else:
-                        try:
-                            # 尝试转为数字以保留数值类型
-                            if isinstance(val, str) and val_str.strip() == '':
-                                cell.value = None
-                            elif isinstance(val, (int, float)):
-                                # 四舍五入到合理精度，避免浮点误差
-                                if isinstance(val, float):
-                                    rounded = round(val, 6)
-                                    if rounded == int(rounded):
-                                        cell.value = int(rounded)
-                                    else:
-                                        cell.value = rounded
-                                else:
-                                    cell.value = val
-                            else:
-                                # 尝试转换字符串为数字
-                                cleaned = val_str.replace(',', '').strip()
-                                if cleaned.replace('.', '').replace('-', '').isdigit():
-                                    num_val = float(cleaned)
-                                    rounded = round(num_val, 6)
-                                    if rounded == int(rounded):
-                                        cell.value = int(rounded)
-                                    else:
-                                        cell.value = rounded
-                                else:
-                                    cell.value = val
-                        except (ValueError, TypeError):
-                            cell.value = val
-        
-        # --- 第二遍：写入公式列（覆盖可能被源数据填充的公式列） ---
-        for col_idx in range(1, num_target_cols + 1):
-            col_letter = get_column_letter(col_idx)
-            if col_letter in formula_info:
-                cell = ws.cell(row=output_row, column=col_idx)
-                formula = formula_info[col_letter]
-                adjusted_formula = adjust_formula_row(formula, output_row)
-                cell.value = adjusted_formula
-        
-        # --- 第三遍：写入统一毛利率配置值 ---
-        # 所有毛利率列统一使用配置的 MARGIN_RATE（默认10%），覆盖公式
-        for col_idx in range(1, num_target_cols + 1):
-            col_letter = get_column_letter(col_idx)
-            cell = ws.cell(row=output_row, column=col_idx)
-            
-            # 毛利率列：强制写入统一配置值
-            if col_letter in margin_columns:
-                cell.value = MARGIN_RATE
-                continue
-            
-            # 如果单元格已经有值（来自源数据），跳过
-            if cell.value is not None:
-                continue
-            
-            # 其他被公式引用的固定值常量（百分比类），写入参考默认值
-            if col_letter in formula_deps and col_letter in fixed_values:
-                val = fixed_values[col_letter]
-                if isinstance(val, (int, float)) and 0 < val < 1:
-                    cell.value = val
-        
-        num_written += 1
-    
-    # ========== 第六步半：插入图片 ==========
-    # 提取源文件中的嵌入图片（传入 header_row 确保行索引与 DataFrame 对齐）
-    images_map = extract_images_from_source(source_file, header_row=source_header_row)
-    if images_map and verbose:
-        print(f"  🖼️ 检测到 {len(images_map)} 张嵌入图片，正在复制...")
-    
-    # 查找图片列：先在 column_mapping 中找，找不到则直接根据列名在源表和目标表中查找
-    target_img_col = None
-    source_img_col = None
-    
-    # 方式A：从 column_mapping 中查找（AI/规则匹配结果）
-    for src_col_name, tgt_idx in column_mapping.items():
-        if '图片' in normalize_header(src_col_name):
-            for i, h in enumerate(source_headers):
-                if normalize_header(h) == normalize_header(src_col_name):
-                    source_img_col = i
-                    break
-            target_img_col = tgt_idx
-            break
-    
-    # 方式B：如果 column_mapping 中没有，直接在源表和目标表头中按列名查找
-    if source_img_col is None:
-        for i, h in enumerate(source_headers):
-            if '图片' in normalize_header(h):
-                source_img_col = i
-                break
-    if target_img_col is None and source_img_col is not None:
-        for i, h in enumerate(target_headers):
-            if '图片' in normalize_header(h):
-                target_img_col = i
-                break
-    
-    if images_map and source_img_col is not None and target_img_col is not None:
-        inserted = 0
-        from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
-        from openpyxl.drawing.xdr import XDRPositiveSize2D
-        
-        # 列宽 EMU
-        target_col_letter = get_column_letter(target_img_col + 1)
-        col_width_chars = template['column_widths'].get(target_col_letter, None)
-        if col_width_chars:
-            col_width_emu = int(col_width_chars * 7 * 914400 / 96)
-        else:
-            col_width_emu = 1143000  # 默认 120px in EMU
-        
-        # 行高与边距（从 config 读取）
-        ROW_HEIGHT_PT = IMAGE_ROW_HEIGHT_PT
-        MARGIN_PT = IMAGE_MARGIN_PT
-        MAX_IMG_H_EMU = int((ROW_HEIGHT_PT - MARGIN_PT * 2) * 12700)  # 图片最大高度 EMU
-        ROW_HEIGHT_EMU = int(ROW_HEIGHT_PT * 12700)
-        
-        # 统一设置所有数据行高度为 60pt
-        for r in range(2, len(source_df) + 2):
-            ws.row_dimensions[r].height = ROW_HEIGHT_PT
-        
-        # 计算每张图片缩放后尺寸（高度限制在 MAX_IMG_H_EMU 内，宽度等比缩放）
-        img_sizes = {}  # (src_row, src_col) → (emu_w, emu_h, colOff)
-        for (src_row, src_col), img_data in images_map.items():
-            if src_col == source_img_col and src_row < len(source_df):
-                try:
-                    test_img = OpenpyxlImage(io.BytesIO(img_data))
-                    orig_w = max(test_img.width, 1)
-                    orig_h = max(test_img.height, 1)
-                    orig_h_emu = int(orig_h * 914400 / 96)
-                    orig_w_emu = int(orig_w * 914400 / 96)
-                    
-                    # 按高度缩放
-                    if orig_h_emu > MAX_IMG_H_EMU:
-                        ratio = MAX_IMG_H_EMU / orig_h_emu
-                        scaled_h_emu = MAX_IMG_H_EMU
-                        scaled_w_emu = int(orig_w_emu * ratio)
-                    else:
-                        scaled_h_emu = orig_h_emu
-                        scaled_w_emu = orig_w_emu
-                    
-                    # 水平居中：计算 colOff
-                    if scaled_w_emu < col_width_emu:
-                        col_off = (col_width_emu - scaled_w_emu) // 2
-                    else:
-                        col_off = 0
-                    
-                    img_sizes[(src_row, src_col)] = (scaled_w_emu, scaled_h_emu, col_off)
-                except Exception:
-                    pass
-        
-        # 插入图片（居中放置）
-        for (src_row, src_col), img_data in images_map.items():
-            if src_col == source_img_col and src_row < len(source_df):
-                size = img_sizes.get((src_row, src_col))
-                if size is None:
-                    continue
-                emu_w, emu_h, col_off = size
-                try:
-                    img_stream = io.BytesIO(img_data)
-                    img = OpenpyxlImage(img_stream)
-                    
-                    # 垂直居中
-                    row_off = (ROW_HEIGHT_EMU - emu_h) // 2
-                    
-                    target_row = src_row + 2
-                    from_marker = AnchorMarker(
-                        col=target_img_col, colOff=col_off,
-                        row=target_row - 1, rowOff=row_off
-                    )
-                    anchor = OneCellAnchor(
-                        _from=from_marker,
-                        ext=XDRPositiveSize2D(cx=emu_w, cy=emu_h)
-                    )
-                    ws.add_image(img, anchor)
-                    inserted += 1
-                except Exception:
-                    pass
-        if verbose:
-            print(f"  ✅ 成功插入 {inserted} 张图片")
-    elif images_map and source_img_col is not None and target_img_col is None:
-        if verbose:
-            print(f"  ⚠️ 检测到 {len(images_map)} 张图片，但目标模板中没有找到'图片'列，图片未插入")
-    
-    # ========== 第七步：设置列宽 ==========
-    for col_idx in range(1, num_target_cols + 1):
-        col_letter = get_column_letter(col_idx)
-        if col_letter in template['column_widths'] and template['column_widths'][col_letter]:
-            ws.column_dimensions[col_letter].width = template['column_widths'][col_letter]
-    
-    # ========== 第八步：保存输出文件 ==========
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    
-    if output_file is None:
-        output_file = os.path.join(OUTPUT_DIR, f"{source_name}_转换结果.xlsx")
-    
-    wb.save(output_file)
-    wb.close()
-    
-    if verbose:
-        print(f"  ✅ 成功! 共写入 {num_written} 行数据")
-        print(f"  📁 输出文件: {output_file}")
-    
-    return output_file
-
-
-def adjust_formula_row(formula: str, target_row: int) -> str:
-    """
-    调整Excel公式中的行号引用
-    
-    参考模板中的公式引用的是第2行（模板数据行），
-    需要将所有行号引用调整为 target_row
-    
-    例如: "=D2&\" - 浦升\"" → "=D5&\" - 浦升\""
-    """
-    # 匹配单元格引用模式 (列字母+行号)
-    def replace_row(match):
-        col_letter = match.group(1)
-        row_num = int(match.group(2))
-        # 只有当行号为2（模板行）时才调整
-        if row_num == 2:
-            return f"{col_letter}{target_row}"
-        return match.group(0)
-    
-    # 匹配模式：一个或多个大写字母后跟数字
-    adjusted = re.sub(r'([A-Z]+)(\d+)', replace_row, formula)
-    return adjusted
-
-
-if __name__ == "__main__":
-    # 测试：转换 表/ 目录下第一个 .xlsx 文件
-    import glob
-    test_files = glob.glob(os.path.join(TABLE_DIR, "*.xlsx")) + glob.glob(os.path.join(TABLE_DIR, "*.xls"))
-    if test_files:
-        convert_table(
-            source_file=test_files[0],
-            reference_file=REFERENCE_FILE,
-            use_ai=True,
-        )
-    else:
-        print("未找到测试文件，请将表格放入 表/ 目录")

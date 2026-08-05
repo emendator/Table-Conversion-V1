@@ -1,0 +1,35 @@
+# ============================================================
+# 表格转换工具 - FastAPI 后端 systemd 服务
+# 部署位置: /etc/systemd/system/table-converter.service
+#
+# 说明：
+#   - 单 worker 运行：后端会话(sessions)保存在进程内存中，
+#     多 worker 会导致登录状态不一致，因此这里固定 --workers 1
+#   - 以 www-data 用户运行，便于读写 /opt/table-converter/data/
+# ============================================================
+
+[Unit]
+Description=Table Converter FastAPI Backend
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+
+# 后端工作目录（app.py 所在目录）
+WorkingDirectory=/opt/table-converter/backend
+
+# 启动命令：监听 127.0.0.1:8004，仅内网由 Nginx 反代
+ExecStart=/opt/table-converter/backend/.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8004 --workers 1
+
+Restart=always
+RestartSec=3
+
+Environment=PYTHONUNBUFFERED=1
+
+# 上传/输出文件较多时提高文件描述符上限
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

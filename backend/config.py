@@ -16,47 +16,47 @@ import os
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.dirname(BACKEND_DIR)  # 项目根目录
 
-TABLE_DIR = os.path.join(BASE_DIR, "表")
-OUTPUT_DIR = os.path.join(BACKEND_DIR, "输出")
-UPLOAD_DIR = os.path.join(BACKEND_DIR, "uploads")
+# 全部数据（映射库、API 配置、上传、输出等）统一存放在项目主目录 data/ 下，
+# 便于查看、备份、移植；目录被删除后会在下次启动时自动重建。
+DATA_DIR = os.path.join(BASE_DIR, "data")
 
-# 确保目录存在
+OUTPUT_DIR = os.path.join(DATA_DIR, "输出")      # 转换结果输出目录
+UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")   # 上传临时文件（自动清理）
+
+# 用户系统数据目录：所有账户信息、邀请码、API Key 均以加密文件存储于此
+# 位于项目主目录 data/users 下，随 data/ 一起统一备份、移植（删除后启动自动重建）
+USERS_DIR = os.path.join(DATA_DIR, "users")
+
+# 旧版用户数据目录（v1 曾存放于 backend/users），启动时自动迁移到 data/users 后删除
+LEGACY_USERS_DIR = os.path.join(BACKEND_DIR, "users")
+
+# 确保目录存在（删除后自动重建）
+os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(USERS_DIR, exist_ok=True)
 
 # ============================================================
 # DeepSeek API 配置
 # ============================================================
-DEEPSEEK_API_KEY = "***REMOVED***"
+# API Key 不再明文写在此处：由用户在网页「API 设置」中填写，
+# 经加密后按账户存储于 data/users/api_keys.json（见 ai_config.py / user_system.py）。
+# 未配置时 AI 匹配会提示用户先填写。
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
+# 官方有效模型名：deepseek-v4-flash / deepseek-v4-pro
+# 注意：v4 系列默认开启「思考模式」，导致 message.content 为空（内容在 reasoning_content）。
+# 必须在请求中显式设置 thinking={"type":"disabled"}（见 deepseek_matcher.call_deepseek_api）。
 DEEPSEEK_MODEL = "deepseek-v4-flash"
-
-# ============================================================
-# CLI 模式默认参考模板路径（Web 界面由用户上传）
-# ============================================================
-REFERENCE_FILE = os.path.join(TABLE_DIR, "参考.xlsx")
 
 # ============================================================
 # 业务规则配置（以下内容可根据需要修改）
 # ============================================================
 
-# 特殊映射规则：硬编码规则，优先级高于AI匹配
-# 格式: {源列名关键词: 目标列名关键词}
-# 当源列名包含左侧关键词时，强制映射到包含右侧关键词的目标列
-SPECIAL_MAPPINGS = {
-    "代发": "新进货价",      # 包含"代发"且不含"运费"的列 → 新进货价
-    "图片": "图片",          # 图片列
-    "照片": "图片",          # 照片 → 图片
-    "序号": "序号",          # 序号列
-    "备注": "备注",          # 备注列
-    "品牌": "品牌",          # 品牌列
-}
-
-# 排除规则：源列名包含这些关键词时不应用特殊映射
-NOT_MAPPING_TO_NEW_PRICE_KEYWORDS = ["运费"]
-
-# 统一毛利率（覆盖参考模板中的原始值）
-MARGIN_RATE = 0.10  # 10%
+# 注意：此处不再有任何硬编码列映射规则。
+# 列名匹配完全依据用户上传表格的实际情况进行：
+#   ① 精确匹配（列名完全相同）
+#   ② 映射匹配库（用户历史确认的映射）
+#   ③ AI 语义匹配（开启时）或本地模糊匹配（关闭时）
 
 # 图片行高（磅）
 IMAGE_ROW_HEIGHT_PT = 60
@@ -73,9 +73,9 @@ HEADER_MATCHING_PROMPT = """你是一个Excel表格列名匹配专家。请将�
 2. **数据内容**：两列的实际数据值是否属于同一类型（如都是价格数字、都是型号代码、都是品牌名等）
 
 ## 重要规则：
-1. 源表中的"代发价"、"代发价格"、"大客户代发价"等包含"代发"的列（不含"运费"），应映射到目标表的"新进货价"
-2. 目标表中以下列是公式列，不需要从源表映射：{skip_columns}
-3. 优先根据数据内容的实际类型来判断，表头名称仅作参考
+1. 所有列（包括公式列）都同样参与映射匹配，一视同仁，不要跳过任何列
+2. 优先匹配**列名完全相同**的列（表头名称一致，应直接一一对应）
+3. 其次根据表头语义（近义词、包含关系）和数据内容类型来判断
 4. 如果找不到合适的匹配，将该源列映射为null
 
 ## 目标表每列的数据样本：
