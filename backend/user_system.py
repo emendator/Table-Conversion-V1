@@ -61,8 +61,21 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def _expire(days) -> str:
-    return (datetime.now() + timedelta(days=days)).isoformat(timespec="seconds")
+def _parse_expire(value) -> str:
+    """将有效期（YYYY-MM-DD 或 ISO 时间）解析为 ISO 时间戳；空/非法 → 空（永久）"""
+    value = (value or "").strip()
+    if not value:
+        return ""
+    try:
+        dt = datetime.fromisoformat(value)
+    except Exception:
+        try:
+            dt = datetime.strptime(value, "%Y-%m-%d")
+        except Exception:
+            return ""
+    if len(value) <= 10:  # 纯日期默认到当天 23:59:59
+        dt = dt.replace(hour=23, minute=59, second=59)
+    return dt.isoformat(timespec="seconds")
 
 
 # ============================================================
@@ -406,15 +419,15 @@ def _decode_codes(codes: list):
     return out
 
 
-def generate_invite(creator_username: str, level: int, days: int) -> dict:
+def generate_invite(creator_username: str, level: int, expires_at: str = "") -> dict:
     """
     生成邀请码
     - admin 可生成 1 级（管理员）和 2 级（用户）；manager 仅可生成 2 级
-    - days 表示「用该邀请码注册的账户的有效期天数」（注册出的账户到期后可删除）
+    - expires_at 表示「用该邀请码注册的账户的有效期截止时间」（空 = 永久，账户到期后可删除）
     - 邀请码本身不设过期：未使用可随时使用，已使用/未使用均可随时删除
     """
     level = int(level)
-    days = max(1, int(days or 7))
+    expires_at = _parse_expire(expires_at)
     with _lock:
         creator = _find_user_by_username(_load_users(), (creator_username or "").strip())
         if creator is None:
@@ -436,7 +449,7 @@ def generate_invite(creator_username: str, level: int, days: int) -> dict:
             "used": False,
             "used_by": "",
             "created_at": _now(),
-            "valid_days": days,   # 注册账户的有效期天数
+            "expires_at": expires_at,   # 注册账户的有效期截止时间（空 = 永久）
         })
         _save_invites(codes)
         return {
@@ -444,7 +457,7 @@ def generate_invite(creator_username: str, level: int, days: int) -> dict:
             "message": "邀请码已生成",
             "code": code,
             "level": level,
-            "valid_days": days,
+            "expires_at": expires_at,
         }
 
 
@@ -480,13 +493,15 @@ def list_invites(actor_username: str) -> list:
                 "used": c.get("used", False),
                 "used_by": c.get("used_by", ""),
                 "created_at": c.get("created_at", ""),
-                "valid_days": c.get("valid_days", 0),
+                "expires_at": c.get("expires_at", ""),
+                "valid_days": c.get("valid_days", 0),   # 旧数据兼容（仅显示用）
             })
         return out
 
 
-def extend_invite(actor_username: str, code_plain: str, days: int) -> dict:
-    days = max(1, int(days or 7))
+def extend_invite(actor_username: str, code_plain: str, expires_at: str = "") -> dict:
+    """设置邀请码对应的账户有效期截止时间（空 = 永久）"""
+    expires_at = _parse_expire(expires_at)
     with _lock:
         actor = _find_user_by_username(_load_users(), (actor_username or "").strip())
         if actor is None or actor.get("role") not in (ROLE_ADMIN, ROLE_MANAGER):
@@ -499,16 +514,9 @@ def extend_invite(actor_username: str, code_plain: str, days: int) -> dict:
                 raw = c.get("_plain")
                 for cc in codes:
                     if decrypt(cc.get("code_enc", "")) == raw:
-                        new_exp = _expire(days)
-                        # 基于现有过期时间续期（取较晚者）
-                        cur = cc.get("expires_at")
-                        try:
-                            base = datetime.fromisoformat(cur) if cur else datetime.now()
-                        except Exception:
-                            base = datetime.now()
-                        cc["expires_at"] = (base + timedelta(days=days)).isoformat(timespec="seconds")
+                        cc["expires_at"] = expires_at
                         _save_invites(codes)
-                        return {"success": True, "message": "已延长", "expires_at": cc["expires_at"]}
+                        return {"success": True, "message": "已设置有效期", "expires_at": expires_at}
                 break
         return {"success": False, "message": "邀请码不存在"}
 
@@ -603,21 +611,25 @@ def register(username: str, password: str, email: str, invite_code: str,
         codes = _load_invites()
         marked = False
         inv_creator = ""
+        inv_expires_at = ""
         inv_valid_days = 0
         for c in codes:
             if decrypt(c.get("code_enc", "")) == (invite_code or "").strip():
                 c["used"] = True
                 c["used_by"] = username
                 inv_creator = c.get("creator", "")
-                inv_valid_days = int(c.get("valid_days", 0) or 0)
+                inv_expires_at = c.get("expires_at") or ""
+                inv_valid_days = int(c.get("valid_days", 0) or 0)   # 旧数据兼容
                 marked = True
                 break
         if not marked:
             return {"success": False, "message": "邀请码无效"}
 
-        # 账户有效期 = 邀请码设置的有效天数（<=0 视为永久）
+        # 账户有效期 = 邀请码设置的截止日期（空 = 永久；旧数据按有效天数从当前时间起算）
         expires_at = None
-        if inv_valid_days > 0:
+        if inv_expires_at:
+            expires_at = inv_expires_at
+        elif inv_valid_days > 0:
             expires_at = (datetime.now() + timedelta(days=inv_valid_days)).isoformat(timespec="seconds")
 
         ph = hash_password(password)
@@ -700,8 +712,9 @@ def list_users(actor_username: str) -> list:
         return [_to_public(u) for u in result]
 
 
-def extend_user(actor_username: str, user_id: str, days: int) -> dict:
-    days = max(1, int(days or 7))
+def extend_user(actor_username: str, user_id: str, expires_at: str = "") -> dict:
+    """设置账号新的有效期截止时间（空 = 永久）"""
+    expires_at = _parse_expire(expires_at)
     with _lock:
         actor = _find_user_by_username(_load_users(), (actor_username or "").strip())
         if actor is None or actor.get("role") not in (ROLE_ADMIN, ROLE_MANAGER):
@@ -715,14 +728,9 @@ def extend_user(actor_username: str, user_id: str, days: int) -> dict:
         if not _can_manage(actor, target.get("username")):
             return {"success": False, "message": "无权操作该账号"}
 
-        cur = target.get("expires_at")
-        try:
-            base = datetime.fromisoformat(cur) if cur else datetime.now()
-        except Exception:
-            base = datetime.now()
-        target["expires_at"] = (base + timedelta(days=days)).isoformat(timespec="seconds")
+        target["expires_at"] = expires_at or None
         _save_users(users)
-        return {"success": True, "message": "已延长有效时间", "expires_at": target["expires_at"]}
+        return {"success": True, "message": "已设置有效期", "expires_at": target["expires_at"]}
 
 
 def disable_user(actor_username: str, user_id: str) -> dict:

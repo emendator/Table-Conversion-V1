@@ -375,16 +375,16 @@ export async function fetchMe() {
 
 /* ===================== 邀请码（admin / manager） ===================== */
 
-export async function generateInvite(level, days) {
-    return api('/api/invite/generate', { method: 'POST', body: JSON.stringify({ level, days }) });
+export async function generateInvite(level, expiresAt) {
+    return api('/api/invite/generate', { method: 'POST', body: JSON.stringify({ level, expires_at: expiresAt }) });
 }
 
 export async function listInvites() {
     return api('/api/invite/list');
 }
 
-export async function extendInvite(code, days) {
-    return api('/api/invite/extend', { method: 'POST', body: JSON.stringify({ code, days }) });
+export async function extendInvite(code, expiresAt) {
+    return api('/api/invite/extend', { method: 'POST', body: JSON.stringify({ code, expires_at: expiresAt }) });
 }
 
 export async function deleteInvite(code) {
@@ -397,8 +397,8 @@ export async function listAdminUsers() {
     return api('/api/admin/users');
 }
 
-export async function extendAdminUser(userId, days) {
-    return api(`/api/admin/users/${userId}/extend`, { method: 'POST', body: JSON.stringify({ days }) });
+export async function extendAdminUser(userId, expiresAt) {
+    return api(`/api/admin/users/${userId}/extend`, { method: 'POST', body: JSON.stringify({ expires_at: expiresAt }) });
 }
 
 export async function disableAdminUser(userId) {

@@ -227,13 +227,13 @@ class LoginRequest(BaseModel):
 class InviteGenerateRequest(BaseModel):
     """生成邀请码请求"""
     level: int = 2     # 1=管理员(一级) 2=用户(二级)
-    days: int = 7      # 有效天数
+    expires_at: str = ""   # 账户有效期截止日期（空 = 永久）
 
 
 class InviteExtendRequest(BaseModel):
     """延长邀请码请求"""
     code: str = ""
-    days: int = 7
+    expires_at: str = ""   # 新的有效期截止日期（空 = 永久）
 
 
 class InviteCodeRequest(BaseModel):
@@ -243,7 +243,7 @@ class InviteCodeRequest(BaseModel):
 
 class UserExtendRequest(BaseModel):
     """延长账号请求"""
-    days: int = 7
+    expires_at: str = ""   # 新的有效期截止日期（空 = 永久）
 
 
 class CompanyPasswordRequest(BaseModel):
@@ -333,7 +333,7 @@ async def api_me(user: dict = Depends(auth.require_login)):
 async def api_invite_generate(body: InviteGenerateRequest,
                               user: dict = Depends(auth.require_manager)):
     """生成邀请码（level: 1=管理员 2=用户）"""
-    result = user_system.generate_invite(user["username"], body.level, body.days)
+    result = user_system.generate_invite(user["username"], body.level, body.expires_at)
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["message"])
     return result
@@ -349,7 +349,7 @@ async def api_invite_list(user: dict = Depends(auth.require_manager)):
 async def api_invite_extend(body: InviteExtendRequest,
                             user: dict = Depends(auth.require_manager)):
     """延长邀请码有效时间"""
-    result = user_system.extend_invite(user["username"], body.code, body.days)
+    result = user_system.extend_invite(user["username"], body.code, body.expires_at)
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["message"])
     return result
@@ -379,7 +379,7 @@ async def api_admin_users(user: dict = Depends(auth.require_manager)):
 async def api_admin_user_extend(user_id: str, body: UserExtendRequest,
                                 user: dict = Depends(auth.require_manager)):
     """延长账号有效时间"""
-    result = user_system.extend_user(user["username"], user_id, body.days)
+    result = user_system.extend_user(user["username"], user_id, body.expires_at)
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["message"])
     return result

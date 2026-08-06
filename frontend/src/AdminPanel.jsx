@@ -3,6 +3,15 @@ import * as api from './api'
 
 const ROLE_LABELS = { admin: '最高级管理员', manager: '管理员', user: '用户' }
 
+/** 格式化本地日期为 YYYY-MM-DD */
+const fmtDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+/** 默认有效期截止日期 = 今天 + 7 天 */
+const defaultExpire = () => {
+    const d = new Date()
+    d.setDate(d.getDate() + 7)
+    return fmtDate(d)
+}
+
 /**
  * 用户管理面板（最高级管理员 / 管理员）
  * - 邀请码：生成（admin 可发管理员/用户邀请；manager 仅用户）、列表、延长
@@ -14,7 +23,7 @@ export default function AdminPanel({ user, onGoBack }) {
     const [loading, setLoading] = useState(false)
     const [msg, setMsg] = useState(null)
     const [invLevel, setInvLevel] = useState(2)
-    const [invDays, setInvDays] = useState(7)
+    const [invExpire, setInvExpire] = useState(defaultExpire())
     const [newInvite, setNewInvite] = useState(null)
     // 公司数据库密码（映射库隔离凭证）
     const [companyInfo, setCompanyInfo] = useState(null)
@@ -37,7 +46,7 @@ export default function AdminPanel({ user, onGoBack }) {
 
     const handleGenerate = async () => {
         setNewInvite(null)
-        const res = await api.generateInvite(invLevel, invDays)
+        const res = await api.generateInvite(invLevel, invExpire)
         if (res.success) {
             setNewInvite(res)
             showMsg('ok', '邀请码已生成')
@@ -56,10 +65,16 @@ export default function AdminPanel({ user, onGoBack }) {
         load()
     }
 
-    const handleExtendUser = async (id) => {
-        const res = await api.extendAdminUser(id, invDays || 7)
-        if (res.success) showMsg('ok', '已延长账号有效期')
-        else showMsg('error', res.detail || res.message || '延长失败')
+    const handleExtendUser = async (u) => {
+        const cur = u.expires_at ? u.expires_at.slice(0, 10) : ''
+        const input = window.prompt(
+            `为账号「${u.username}」设置新的有效期截止日期（YYYY-MM-DD，留空 = 永久）：\n当前有效期：${u.expires_at || '永久'}`,
+            cur
+        )
+        if (input === null) return
+        const res = await api.extendAdminUser(u.id, input.trim())
+        if (res.success) showMsg('ok', res.message || '已设置有效期')
+        else showMsg('error', res.detail || res.message || '设置失败')
         load()
     }
 
@@ -104,8 +119,9 @@ export default function AdminPanel({ user, onGoBack }) {
                             {user.role === 'admin' && <option value={1}>管理员</option>}
                         </select>
                     </label>
-                    <label>账户有效期(天)
-                        <input type="number" min="1" value={invDays} onChange={e => setInvDays(Number(e.target.value))} />
+                    <label>账户有效期至
+                        <input type="date" value={invExpire} onChange={e => setInvExpire(e.target.value)} />
+                        <span style={{ fontSize: 12, color: '#94A3B8' }}>留空 = 永久</span>
                     </label>
                     <button className="btn btn-primary" onClick={handleGenerate}>生成邀请码</button>
                 </div>
@@ -113,7 +129,7 @@ export default function AdminPanel({ user, onGoBack }) {
                 {newInvite && (
                     <div className="admin-new-invite">
                         🎉 新邀请码：<b>{newInvite.code}</b>
-                        <span>（{newInvite.level === 1 ? '管理员' : '用户'} · 注册账户有效期 {newInvite.valid_days} 天）</span>
+                        <span>（{newInvite.level === 1 ? '管理员' : '用户'} · 注册账户有效期至 {newInvite.expires_at || '永久'}）</span>
                         <span className="admin-copy-tip">请复制并分发给需要注册的人，绑定后即作废</span>
                     </div>
                 )}
@@ -137,7 +153,7 @@ export default function AdminPanel({ user, onGoBack }) {
                                     <td>{iv.used ? <span className="badge-used">已使用</span> : <span className="badge-unused">未使用</span>}</td>
                                     <td>{iv.used_by || '—'}</td>
                                     <td>{iv.created_at}</td>
-                                    <td>{iv.valid_days ? `${iv.valid_days} 天` : '永久'}</td>
+                                    <td>{iv.expires_at ? `至 ${iv.expires_at}` : (iv.valid_days ? `注册后 ${iv.valid_days} 天` : '永久')}</td>
                                     <td className="admin-actions">
                                         <button className="btn btn-sm btn-danger" onClick={() => handleDeleteInvite(iv)}>删除</button>
                                     </td>
@@ -181,7 +197,7 @@ export default function AdminPanel({ user, onGoBack }) {
                                     <td className="admin-actions">
                                         {u.username !== 'admin' && (
                                             <>
-                                                <button className="btn btn-sm btn-outline" onClick={() => handleExtendUser(u.id)}>延长</button>
+                                                <button className="btn btn-sm btn-outline" onClick={() => handleExtendUser(u)}>延长</button>
                                                 <button className="btn btn-sm btn-danger" onClick={() => handleDisable(u)}>清除</button>
                                             </>
                                         )}
