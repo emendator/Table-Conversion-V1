@@ -199,8 +199,8 @@ export default function AuthPage({ onAuthSuccess }) {
                     🚪 以游客身份登录
                 </button>
                 <p className="auth-hint auth-guest-hint">
-                    游客可试用全部功能（需自行配置 API Key），无用户管理权限；
-                    退出登录后自动清除所有使用数据。
+                    ⚠️ <b>游客模式不保留任何数据</b>：可试用全部功能（需自行配置 API Key），无用户管理权限；
+                    退出登录后，账号、映射库、API Key、上传/输出文件等<b>所有数据将被自动清除，不会保留</b>。
                 </p>
 
                 <div className="auth-foot">

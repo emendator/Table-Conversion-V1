@@ -540,6 +540,13 @@ function App() {
         </div>
       </header>
 
+      {currentUser.is_guest && (
+        <div className="guest-notice">
+          🚪 <b>游客模式 · 不保留任何数据</b>
+          <span>退出登录后，账号、映射库、API Key、上传/输出文件等所有数据将被自动清除，不会保留</span>
+        </div>
+      )}
+
       {view === 'admin' ? (
         <AdminPanel user={currentUser} onGoBack={() => setView('tool')} />
       ) : view === 'library' ? (

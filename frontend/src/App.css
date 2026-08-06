@@ -1850,6 +1850,26 @@ body {
   margin-top: 8px;
 }
 
+/* 游客模式顶部提示条：不保留任何数据 */
+.guest-notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 16px;
+  background: #FEF3C7;
+  border-bottom: 1px solid #FDE68A;
+  color: #92400E;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.guest-notice span {
+  color: #B45309;
+}
+
 .auth-loading {
   min-height: 100vh;
   display: flex;
