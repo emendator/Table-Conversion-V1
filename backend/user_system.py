@@ -206,6 +206,50 @@ def update_company_db_password(actor_username: str, company: str, new_password: 
         }
 
 
+def _cleanup_empty_companies() -> list:
+    """
+    自动清理「没有任何注册账号」的公司：
+    - 删除 companies.json 中的公司记录（公司名 + 加密密码）
+    - 删除该公司对应的映射库（图片库）文件 data/映射历史记录_{company_key}.json
+    - 内置最高级管理员公司永不清理；其他公司仅当名下用户数为 0 时删除。
+    返回被清理的公司名列表。
+    """
+    with _lock:
+        users = _load_users()
+        companies = _load_companies()
+        if not companies:
+            return []
+
+        active_companies = {u.get("company", "") for u in users if u.get("company")}
+        removed = []
+        changed = False
+        for company, rec in list(companies.items()):
+            if company == SUPER_ADMIN_COMPANY:
+                continue   # 内置公司永不清理
+            if company in active_companies:
+                continue   # 仍有注册账号，保留
+
+            # 无注册账号 → 删除该公司映射库（图片库）文件
+            company_key = derive_company_key(company, decrypt(rec.get("db_pwd_enc", "")))
+            for path in (
+                os.path.join(DATA_DIR, f"映射历史记录_{company_key}.json"),
+                os.path.join(DATA_DIR, f"映射历史记录_{company}.json"),  # 旧版按公司名键的文件
+            ):
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                except Exception:
+                    pass
+
+            companies.pop(company, None)
+            changed = True
+            removed.append(company)
+
+        if changed:
+            _save_companies(companies)
+        return removed
+
+
 # ============================================================
 # 旧版数据迁移（backend/users → data/users，并转为加密文件）
 # ============================================================
@@ -310,6 +354,9 @@ def init_super_admin() -> None:
         else:
             # 存量数据迁移：为已有用户的公司补全 company_key 与公司数据库记录
             _backfill_company_dbs(users)
+
+    # 启动兜底：清理没有任何注册账号的公司（公司名 + 密码 + 对应映射库/图片库）
+    _cleanup_empty_companies()
 
 
 def _migrate_company_mapping_file(company: str, company_key: str) -> None:
@@ -783,10 +830,17 @@ def disable_user(actor_username: str, user_id: str) -> dict:
             codes = [c for c in codes if c.get("creator") != target.get("username")]
             _save_invites(codes)
 
+        # 自动清理：没有任何注册账号的公司（公司名 + 密码 + 对应映射库/图片库）
+        cleaned = _cleanup_empty_companies()
+
+        msg = f"已清除 {len(removed_ids)} 个账号"
+        if cleaned:
+            msg += "；并自动清理无账号公司：" + "、".join(cleaned)
         return {
             "success": True,
-            "message": f"已清除 {len(removed_ids)} 个账号",
+            "message": msg,
             "removed": len(removed_ids),
+            "cleaned_companies": cleaned,
         }
 
 
