@@ -117,6 +117,25 @@ def cleanup_old_files():
         print(f"  🧹 已清理 {cleaned} 个过期临时文件")
 
 
+def _cleanup_session_files(request: Request) -> None:
+    """删除当前会话产生的上传/输出临时文件并移除会话（游客退出登录时清除使用痕迹用）"""
+    sid = get_session_id(request)
+    data = sessions.pop(sid, None)
+    if not data:
+        return
+    paths = list(data.get("source_paths", []))
+    if data.get("reference_path"):
+        paths.append(data["reference_path"])
+    if data.get("output_path"):
+        paths.append(data["output_path"])
+    for p in paths:
+        try:
+            if p and os.path.isfile(p):
+                os.remove(p)
+        except Exception:
+            pass
+
+
 # ============================================================
 # API Key 传输加密（前端↔后端）
 # 前端使用会话 nonce 对 Key 做 XOR 流加密后上传，避免明文出现在网络请求中。
@@ -314,9 +333,23 @@ async def api_login(body: LoginRequest):
 
 @app.post("/api/auth/logout")
 async def api_logout(request: Request):
-    """登出：使当前令牌失效"""
-    auth.revoke_token(auth._extract_token(request))
+    """登出：使当前令牌失效；游客登出时自动清除全部使用痕迹"""
+    token = auth._extract_token(request)
+    user = auth.get_user_by_token(token)
+    auth.revoke_token(token)
+    if user and user.get("is_guest"):
+        # 游客：删除账号 + 映射库/API Key + 本次会话产生的上传/输出文件
+        user_system.delete_guest(user.get("username", ""))
+        _cleanup_session_files(request)
     return {"success": True}
+
+
+@app.post("/api/auth/guest")
+async def api_guest():
+    """游客登录：创建临时游客账号（独立映射库，退出登录后自动清除全部使用痕迹）"""
+    user = user_system.create_guest()
+    token = auth.create_token(user["username"])
+    return {"success": True, "message": "游客登录成功", "user": user, "token": token}
 
 
 @app.get("/api/auth/me")

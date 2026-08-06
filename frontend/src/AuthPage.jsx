@@ -18,6 +18,22 @@ export default function AuthPage({ onAuthSuccess }) {
 
     const setField = (key) => (e) => setForm({ ...form, [key]: e.target.value })
 
+    const handleGuest = async () => {
+        setError('')
+        setLoading(true)
+        try {
+            const res = await api.guestLogin()
+            if (res.success) {
+                api.setToken(res.token)
+                api.setStoredUser(res.user)
+                onAuthSuccess(res.user)
+            } else {
+                setError(res.detail || res.message || '游客登录失败')
+            }
+        } catch (err) { setError('网络错误: ' + err.message) }
+        finally { setLoading(false) }
+    }
+
     const handleSubmit = async (e) => {
         e.preventDefault()
         setError('')
@@ -175,6 +191,17 @@ export default function AuthPage({ onAuthSuccess }) {
                         {loading ? '请稍候...' : (mode === 'login' ? '登 录' : '注 册')}
                     </button>
                 </form>
+
+                <div className="auth-divider"><span>或</span></div>
+
+                <button type="button" className="btn btn-outline auth-guest-btn"
+                    onClick={handleGuest} disabled={loading}>
+                    🚪 以游客身份登录
+                </button>
+                <p className="auth-hint auth-guest-hint">
+                    游客可试用全部功能（需自行配置 API Key），无用户管理权限；
+                    退出登录后自动清除所有使用数据。
+                </p>
 
                 <div className="auth-foot">
                     {mode === 'login'

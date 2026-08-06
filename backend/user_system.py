@@ -49,6 +49,11 @@ SUPER_ADMIN_COMPANY = "***REMOVED***"
 # admin 可随时在「用户管理 → 公司数据库密码」中修改；存量公司迁移时使用随机密码。
 SUPER_ADMIN_COMPANY_DB_PWD = "***REMOVED***"
 
+# 游客登录：无密码临时账号，退出登录（或令牌过期 / 服务重启）后自动清除全部使用痕迹
+GUEST_USERNAME_PREFIX = "__guest_"   # 游客用户名前缀（禁止注册同名）
+GUEST_COMPANY_PREFIX = "__游客_"     # 游客的伪公司名（不写入公司注册表）
+GUEST_TTL_SECONDS = 25 * 3600         # 游客有效时长（略大于令牌 24h），超时自动清理
+
 # 密码最小长度
 MIN_PASSWORD_LEN = 6
 
@@ -298,6 +303,7 @@ def _to_public(u: dict) -> dict:
         "last_login_at": u.get("last_login_at", ""),
         "expires_at": u.get("expires_at"),
         "status": u.get("status", "active"),
+        "is_guest": bool(u.get("is_guest")),
     }
 
 
@@ -357,6 +363,8 @@ def init_super_admin() -> None:
 
     # 启动兜底：清理没有任何注册账号的公司（公司名 + 密码 + 对应映射库/图片库）
     _cleanup_empty_companies()
+    # 服务重启后游客令牌全部失效：清理全部游客账号及其使用痕迹
+    _cleanup_guests(force=True)
 
 
 def _migrate_company_mapping_file(company: str, company_key: str) -> None:
@@ -383,6 +391,8 @@ def _backfill_company_dbs(users: list) -> None:
     need_users_save = False
     need_companies_save = False
     for u in users:
+        if u.get("is_guest"):
+            continue   # 游客的伪公司不写入公司注册表
         company = (u.get("company") or "").strip()
         if not company:
             continue
@@ -449,6 +459,7 @@ def user_by_username(username: str):
             "role": u.get("role", ROLE_USER),
             "status": u.get("status", "active"),
             "expires_at": u.get("expires_at"),
+            "is_guest": bool(u.get("is_guest")),
         }
 
 
@@ -612,6 +623,8 @@ def register(username: str, password: str, email: str, invite_code: str,
     company_db_password = (company_db_password or "").strip()
     password = password or ""
 
+    if username.startswith(GUEST_USERNAME_PREFIX):
+        return {"success": False, "message": "该用户名不可用"}
     if not username or len(username) < 2:
         return {"success": False, "message": "用户名至少 2 个字符"}
     if len(password) < MIN_PASSWORD_LEN:
@@ -753,9 +766,10 @@ def list_users(actor_username: str) -> list:
             return []
         mine = _created_by(actor.get("username"))
         users = _load_users()
-        # 仅返回：自己 + 自己创建的账户（不显示系统中所有账户）
+        # 仅返回：自己 + 自己创建的账户（不显示系统中所有账户；游客不展示）
         result = [u for u in users
-                  if u.get("username") == actor.get("username") or u.get("username") in mine]
+                  if not u.get("is_guest")
+                  and (u.get("username") == actor.get("username") or u.get("username") in mine)]
         return [_to_public(u) for u in result]
 
 
@@ -842,6 +856,97 @@ def disable_user(actor_username: str, user_id: str) -> dict:
             "removed": len(removed_ids),
             "cleaned_companies": cleaned,
         }
+
+
+# ============================================================
+# 游客登录（临时账号，退出后自动清除全部使用痕迹）
+# ============================================================
+
+def _is_stale_guest(guest: dict, now: datetime) -> bool:
+    """判断游客是否已失效（创建超过有效时长，此时令牌必然已过期）"""
+    try:
+        created = datetime.fromisoformat(guest.get("created_at", ""))
+    except Exception:
+        created = now
+    return (now - created).total_seconds() > GUEST_TTL_SECONDS
+
+
+def _delete_guest_data(guest: dict) -> None:
+    """删除游客的所有使用痕迹：映射库（图片库）文件 + API Key"""
+    company_key = guest.get("company_key", "")
+    if company_key:
+        path = os.path.join(DATA_DIR, f"映射历史记录_{company_key}.json")
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+    username = guest.get("username", "")
+    if username:
+        keys = _load_apikeys()
+        if username in keys:
+            keys.pop(username, None)
+            _save_apikeys(keys)
+
+
+def _cleanup_guests(force: bool = False) -> int:
+    """清理游客账号及使用痕迹：force=True 全部清理（服务重启后令牌失效）；否则清理超时的"""
+    with _lock:
+        users = _load_users()
+        now = datetime.now()
+        kept = []
+        removed = 0
+        for u in users:
+            if u.get("is_guest") and (force or _is_stale_guest(u, now)):
+                _delete_guest_data(u)
+                removed += 1
+            else:
+                kept.append(u)
+        if removed:
+            _save_users(kept)
+        return removed
+
+
+def create_guest() -> dict:
+    """创建游客账号：独立伪公司 + 随机隔离键，角色 user（无管理界面），退出登录后自动清除"""
+    with _lock:
+        _cleanup_guests()   # 顺带清理已失效游客，避免累积
+        users = _load_users()
+        gid = secrets.token_hex(6)
+        username = f"{GUEST_USERNAME_PREFIX}{gid}"
+        company = f"{GUEST_COMPANY_PREFIX}{gid}"
+        company_key = secrets.token_hex(12)   # 独立随机隔离键（映射库文件名依据）
+        guest = {
+            "id": uuid.uuid4().hex[:12],
+            "username": username,
+            "password_hash_enc": encrypt(hash_password(secrets.token_urlsafe(24))),  # 随机密码，无法密码登录
+            "email_enc": encrypt(""),
+            "company": company,
+            "company_key": company_key,
+            "role": ROLE_USER,
+            "created_by": "",
+            "created_at": _now(),
+            "last_login_at": _now(),
+            "expires_at": None,
+            "status": "active",
+            "is_guest": True,
+        }
+        users.append(guest)
+        _save_users(users)
+        return _to_public(guest)
+
+
+def delete_guest(username: str) -> bool:
+    """游客退出登录：删除账号记录 + 映射库/API Key 等全部使用痕迹"""
+    with _lock:
+        users = _load_users()
+        guest = _find_user_by_username(users, username)
+        if guest is None or not guest.get("is_guest"):
+            return False
+        _delete_guest_data(guest)
+        users = [u for u in users if u.get("username") != username]
+        _save_users(users)
+        return True
 
 
 # ============================================================

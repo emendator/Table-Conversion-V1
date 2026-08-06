@@ -526,10 +526,14 @@ function App() {
             >
               ⚙️ API 设置{aiConfig.hasKey ? '' : ' ⚠️'}
             </button>
-            <div className="user-box" title={`${currentUser.company} · ${ROLE_LABELS[currentUser.role] || currentUser.role}`}>
+            <div className="user-box" title={currentUser.is_guest
+              ? '游客模式 · 退出登录后自动清除全部数据'
+              : `${currentUser.company} · ${ROLE_LABELS[currentUser.role] || currentUser.role}`}>
               <span className="user-avatar">👤</span>
-              <span className="user-name">{currentUser.username}</span>
-              <span className={`role-badge role-${currentUser.role}`}>{ROLE_LABELS[currentUser.role] || currentUser.role}</span>
+              <span className="user-name">{currentUser.is_guest ? '游客' : currentUser.username}</span>
+              <span className={`role-badge ${currentUser.is_guest ? 'role-user' : `role-${currentUser.role}`}`}>
+                {currentUser.is_guest ? '游客' : (ROLE_LABELS[currentUser.role] || currentUser.role)}
+              </span>
             </div>
             <button className="btn btn-sm btn-outline logout-btn" onClick={handleLogout}>退出登录</button>
           </div>

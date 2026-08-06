@@ -365,6 +365,11 @@ export async function login(payload) {
     return api('/api/auth/login', { method: 'POST', body: JSON.stringify(payload) });
 }
 
+/** 游客登录：创建临时游客账号，退出登录后后端自动清除全部使用痕迹 */
+export async function guestLogin() {
+    return api('/api/auth/guest', { method: 'POST' });
+}
+
 export async function logout() {
     return api('/api/auth/logout', { method: 'POST' });
 }
