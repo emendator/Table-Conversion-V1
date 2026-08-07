@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 /**
  * 可折叠模块卡片（下拉列表）
@@ -14,9 +14,13 @@ import { useState, useEffect } from 'react'
  */
 export default function CollapsibleSection({ title, defaultOpen = true, actions, summary, collapsed, children }) {
     const [open, setOpen] = useState(defaultOpen)
-    // 外部要求收起时（如匹配完成后），自动收起模块
+    const prevCollapsed = useRef(collapsed)
+    // 外部控制收起/展开：collapsed=true 时收起；
+    // 解除收起（如重新进入匹配步骤）时自动展开（仅 true→false 转变时触发，不影响 defaultOpen）
     useEffect(() => {
         if (collapsed) setOpen(false)
+        else if (prevCollapsed.current === true) setOpen(true)
+        prevCollapsed.current = collapsed
     }, [collapsed])
     return (
         <section className={`card collapsible ${open ? 'collapsible-open' : 'collapsible-closed'}`}>

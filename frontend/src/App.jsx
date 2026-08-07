@@ -637,7 +637,7 @@ function App() {
 
               {sourceReady && referenceReady && step === 1 && (
                 <div style={{ textAlign: 'center', marginTop: 16 }}>
-                  <button className="btn btn-primary" onClick={() => setStep(2)}>下一步 → 匹配</button>
+                  <button className="btn btn-primary" onClick={() => { setStep(2); setMatchCollapsed(false); setMatchStatus(null) }}>下一步 → 匹配</button>
                 </div>
               )}
             </CollapsibleSection>
