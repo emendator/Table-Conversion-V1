@@ -463,8 +463,11 @@ async def api_company_password(body: CompanyPasswordRequest,
 
 
 @app.post("/api/upload/source")
-async def upload_source(request: Request, files: list[UploadFile] = File(...), user: dict = Depends(auth.require_login)):
-    """上传原始表格文件（支持多文件）"""
+def upload_source(request: Request, files: list[UploadFile] = File(...), user: dict = Depends(auth.require_login)):
+    """上传原始表格文件（支持多文件）
+
+    同步 def 路由：FastAPI 会将其放入线程池执行，避免 pandas/openpyxl 解析大文件时阻塞事件循环。
+    """
     cleanup_old_files()
     data = get_session(request)
     uploaded = []
@@ -480,7 +483,7 @@ async def upload_source(request: Request, files: list[UploadFile] = File(...), u
 
         fname = f"source_{uuid.uuid4().hex[:8]}{ext}"
         filepath = os.path.join(UPLOAD_DIR, fname)
-        content = await file.read()
+        content = file.file.read()
         os.makedirs(UPLOAD_DIR, exist_ok=True)   # 上传目录被删除后自动重建
         with open(filepath, "wb") as f:
             f.write(content)
@@ -541,7 +544,7 @@ async def upload_source(request: Request, files: list[UploadFile] = File(...), u
 
 
 @app.post("/api/upload/reference")
-async def upload_reference(request: Request, file: UploadFile = File(...), user: dict = Depends(auth.require_login)):
+def upload_reference(request: Request, file: UploadFile = File(...), user: dict = Depends(auth.require_login)):
     """上传参考模板文件"""
     cleanup_old_files()
     if not file.filename:
@@ -553,7 +556,7 @@ async def upload_reference(request: Request, file: UploadFile = File(...), user:
 
     fname = f"ref_{uuid.uuid4().hex[:8]}{ext}"
     filepath = os.path.join(UPLOAD_DIR, fname)
-    content = await file.read()
+    content = file.file.read()
     os.makedirs(UPLOAD_DIR, exist_ok=True)   # 上传目录被删除后自动重建
     with open(filepath, "wb") as f:
         f.write(content)
@@ -728,7 +731,7 @@ async def api_mapping_library_clear(user: dict = Depends(auth.require_login)):
 
 
 @app.get("/api/mapping-library/export")
-async def api_mapping_library_export(user: dict = Depends(auth.require_login)):
+def api_mapping_library_export(user: dict = Depends(auth.require_login)):
     """导出映射库全部记录（Excel 表格 .xlsx）"""
     import io
     import pandas as pd
@@ -763,7 +766,7 @@ async def api_mapping_library_export(user: dict = Depends(auth.require_login)):
 
 
 @app.post("/api/mapping-library/import/parse")
-async def api_mapping_library_import_parse(file: UploadFile = File(...), user: dict = Depends(auth.require_login)):
+def api_mapping_library_import_parse(file: UploadFile = File(...), user: dict = Depends(auth.require_login)):
     """解析上传的表格文件（.xlsx/.xls/.csv），提取映射记录"""
     import io
     import pandas as pd
@@ -774,7 +777,7 @@ async def api_mapping_library_import_parse(file: UploadFile = File(...), user: d
     if ext not in (".xlsx", ".xls", ".csv"):
         raise HTTPException(status_code=400, detail="仅支持 .xlsx / .xls / .csv 格式")
 
-    content = await file.read()
+    content = file.file.read()
     try:
         if ext == ".csv":
             df = pd.read_csv(io.BytesIO(content), dtype=object)
@@ -851,8 +854,13 @@ def _default_formula_action(is_src_formula: bool, is_tgt_formula: bool) -> str:
 
 
 @app.post("/api/match")
-async def api_match(request: Request, body: MatchRequest = MatchRequest(), user: dict = Depends(auth.require_login)):
-    """执行 AI 列名匹配（多文件时并发调用，缩短总等待时间）"""
+def api_match(request: Request, body: MatchRequest = MatchRequest(), user: dict = Depends(auth.require_login)):
+    """执行 AI 列名匹配（多文件时并发调用，缩短总等待时间）
+
+    同步 def 路由：内部会调用 DeepSeek API（可能长时间阻塞）。
+    必须由线程池执行，绝不能阻塞 asyncio 事件循环，否则单个 AI 请求挂起
+    会让整个服务（含登录）全部卡死（2026-08-07 线上事故根因）。
+    """
     import pandas as pd
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1018,8 +1026,12 @@ async def api_match(request: Request, body: MatchRequest = MatchRequest(), user:
 
 
 @app.post("/api/convert")
-async def api_convert(request: Request, body: ConvertRequest = ConvertRequest(), user: dict = Depends(auth.require_login)):
-    """执行表格转换（支持多源文件批量处理并合并）"""
+def api_convert(request: Request, body: ConvertRequest = ConvertRequest(), user: dict = Depends(auth.require_login)):
+    """执行表格转换（支持多源文件批量处理并合并）
+
+    同步 def 路由：openpyxl/pandas 转换大文件可能耗时较长，
+    放入线程池执行以免阻塞事件循环。
+    """
     data = get_session(request)
 
     if not data["source_files"]:

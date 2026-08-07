@@ -11,6 +11,7 @@ from openpyxl.drawing.image import Image as OpenpyxlImage
 import os
 import re
 import io
+import struct as _struct
 import zipfile
 from copy import copy
 
@@ -19,6 +20,12 @@ try:
     _HAS_LXML = True
 except ImportError:
     _HAS_LXML = False
+
+try:
+    import olefile as _olefile
+    _HAS_OLEFILE = True
+except ImportError:
+    _HAS_OLEFILE = False
 
 from config import (
     IMAGE_ROW_HEIGHT_PT,
@@ -425,14 +432,181 @@ def _extract_richdata_images(z, all_names, header_row, raw_to_df) -> dict:
     return images_map
 
 
+def _is_image_column_name(header) -> bool:
+    """判断列名是否为图片列（兼容中英文常见命名：图片/照片/图1/主图/Image/Img/Photo）"""
+    h = normalize_header(header).lower()
+    if not h:
+        return False
+    for kw in ("图片", "照片", "image", "photo", "img"):
+        if kw in h:
+            return True
+    if h == "图":
+        return True
+    if h.startswith("图") and len(h) > 1 and h[1].isdigit():
+        return True
+    return False
+
+
+def _extract_xls_biff8_images(source_path: str) -> list:
+    """从 BIFF8（.xls / OLE2 复合文档）提取嵌入图片，按出现顺序返回字节列表。
+
+    背景：老式 .xls（含 WPS 生成的）不是 zip 包，无法用 zipfile 读取，
+    此前会导致图片完全丢失。WPS 的单元格内图片以 OfficeArt 形式存于
+    Workbook 流的 MSODRAWING 记录（0x00EC）及其 CONTINUE 续接（0x003C/0x00EB）
+    中；图片本身是 PNG/JPEG 等 Blip 数据。这里把 MSODRAWING 完整拼接后
+    按图片魔数提取，天然按 BSE 存储顺序返回。
+
+    Returns:
+        list[bytes]: 按存储顺序的图片字节列表（无图片时为空列表）
+    """
+    if not _HAS_OLEFILE:
+        return []
+    try:
+        ole = _olefile.OleFileIO(source_path)
+        try:
+            wb = ole.openstream('Workbook').read()
+        except Exception:
+            return []
+        finally:
+            ole.close()
+    except Exception:
+        return []
+
+    # 拼接所有 MSODRAWING 记录及其 CONTINUE 续接。
+    # 标准 Excel 用 0x00EC(MSODRAWING)+0x003C(CONTINUE)；
+    # WPS 生成的 .xls 用 0x00EB 承载 MSODRAWING 数据（同样以 0x003C 续接）。
+    blob = bytearray()
+    i = 0
+    n = len(wb)
+    try:
+        while i + 4 <= n:
+            rt = _struct.unpack('<H', wb[i:i+2])[0]
+            rl = _struct.unpack('<H', wb[i+2:i+4])[0]
+            if rt in (0x00EC, 0x00EB):
+                blob += wb[i+4:i+4+rl]
+                j = i + 4 + rl
+                while j + 4 <= n:
+                    rt2 = _struct.unpack('<H', wb[j:j+2])[0]
+                    rl2 = _struct.unpack('<H', wb[j+2:j+4])[0]
+                    if rt2 == 0x003C:
+                        blob += wb[j+4:j+4+rl2]
+                        j += 4 + rl2
+                    else:
+                        break
+                i = j
+            else:
+                i += 4 + rl
+    except Exception:
+        pass
+    blob = bytes(blob)
+    if len(blob) < 8:
+        return []
+
+    # 按魔数提取图片（PNG/JPEG/GIF；BMP 需配合 bfSize 校验避免误报）
+    images = []
+    pos = 0
+    try:
+        while pos < len(blob) - 8:
+            png = blob.find(b'\x89PNG\r\n\x1a\n', pos)
+            jpg = blob.find(b'\xff\xd8\xff', pos)
+            gif = blob.find(b'GIF8', pos)
+            bmp = blob.find(b'BM', pos)
+            cands = [(x, t) for x, t in
+                     ((png, 'png'), (jpg, 'jpg'), (gif, 'gif'), (bmp, 'bmp')) if x >= 0]
+            if not cands:
+                break
+            start, kind = min(cands)
+            end = None
+            if kind == 'png':
+                iend = blob.find(b'IEND', start + 8)
+                if iend >= 0:
+                    end = iend + 8
+            elif kind == 'jpg':
+                p = start + 2
+                while p < len(blob) - 1:
+                    if blob[p] == 0xFF and blob[p + 1] == 0xD9:
+                        end = p + 2
+                        break
+                    p += 1
+            elif kind == 'gif':
+                trail = blob.find(b'\x3b', start + 13)
+                if trail >= 0:
+                    end = trail + 1
+            elif kind == 'bmp':
+                # 'BM' + bfSize(4)：校验文件大小合理且在流内，降低误报
+                if start + 6 <= len(blob):
+                    sz = _struct.unpack('<I', blob[start+2:start+6])[0]
+                    if 50 < sz <= 50 * 1024 * 1024 and start + sz <= len(blob):
+                        end = start + sz
+            if end is None or end <= start + 8:
+                pos = start + 2
+                continue
+            img = blob[start:end]
+            if len(img) > 50:
+                images.append(img)
+            pos = end
+    except Exception:
+        pass
+    return images
+
+
+def _extract_images_from_biff8(source_path: str, header_row: int = None) -> dict:
+    """BIFF8（.xls）图片提取入口：返回 {(df_row_idx, col_idx): image_bytes}
+
+    图片位置说明：WPS 的 .xls 单元格内图片在二进制 OfficeArt 中未暴露行列，
+    只能按「图片存储顺序 = 数据行顺序」推断；图片列优先按表头名称识别，
+    无法识别时用 0 列兜底（由调用方 find_source_image_columns 二次推断）。
+    """
+    images = _extract_xls_biff8_images(source_path)
+    if not images:
+        return {}
+    try:
+        df_raw = pd.read_excel(source_path, header=None, dtype=object)
+    except Exception:
+        return {}
+    if header_row is None:
+        header_row = 0
+        for i in range(min(5, len(df_raw))):
+            row_vals = df_raw.iloc[i].tolist()
+            non_null = sum(1 for v in row_vals
+                           if not pd.isna(v) and str(v).strip() != '')
+            if non_null >= 2:
+                header_row = i
+                break
+    if header_row >= len(df_raw):
+        return {}
+    headers = [str(v) if not pd.isna(v) else '' for v in df_raw.iloc[header_row].tolist()]
+    # 图片列：优先表头含图片语义的列
+    col_idx = None
+    for i, h in enumerate(headers):
+        if _is_image_column_name(h):
+            col_idx = i
+            break
+    if col_idx is None:
+        col_idx = 0
+    # 数据行数（对齐 dropna(how='all')）
+    n_data = 0
+    for r in range(header_row + 1, len(df_raw)):
+        row_vals = df_raw.iloc[r].tolist()
+        if not all(pd.isna(v) or str(v).strip() == '' for v in row_vals):
+            n_data += 1
+    result = {}
+    for img_idx, img in enumerate(images):
+        if img_idx >= n_data:
+            break
+        result[(img_idx, col_idx)] = img
+    return result
+
+
 def extract_images_from_source(source_path: str, header_row: int = None) -> dict:
     """
-    从源文件中提取嵌入的图片（同时支持 cellImages 和 drawings 两种格式）
+    从源文件中提取嵌入的图片
     
     支持三种图片存储方式：
     1. cellImages 格式（DISPIMG公式）：解析 cellImages.xml 获取位置
     2. drawings 格式（浮动图片）：使用 lxml 解析 xl/drawings/drawing*.xml 获取锚点位置
-    3. .xls (OpenXML包装)：通过 pandas 读取 DISPIMG 值 + zip 提取图片
+    3. .xls (BIFF8/OLE2 二进制，含 WPS 生成)：从 Workbook 流的 MSODRAWING 记录
+       提取图片（位置按存储顺序推断）
     
     Args:
         source_path: 源文件路径
@@ -444,7 +618,16 @@ def extract_images_from_source(source_path: str, header_row: int = None) -> dict
               col_idx: 0-based 列索引
     """
     images_map = {}
-    
+
+    # OLE2 二进制 .xls（老版 Excel / WPS）：非 zip，走 BIFF8 专用提取
+    try:
+        with open(source_path, 'rb') as _f:
+            _head = _f.read(8)
+        if _head[:8] == bytes.fromhex('d0cf11e0a1b11ae1'):
+            return _extract_images_from_biff8(source_path, header_row)
+    except Exception:
+        pass
+
     try:
         with zipfile.ZipFile(source_path, 'r') as z:
             all_names = set(z.namelist())  # 用 set 加速查找

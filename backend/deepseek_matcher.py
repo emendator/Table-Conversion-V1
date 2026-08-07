@@ -49,7 +49,9 @@ def call_deepseek_api(prompt: str, max_tokens: int = 8192) -> str:
         payload["thinking"] = {"type": "disabled"}
     
     try:
-        response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=120)
+        # 连接超时 10s + 读取超时 120s：防止 DeepSeek 网络异常时 TCP 长时间挂起
+        # （2026-08-07 线上事故：AI 请求连接后不回包，阻塞事件循环导致全站登录卡死）
+        response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=(10, 120))
         response.raise_for_status()
         result = response.json()
 
