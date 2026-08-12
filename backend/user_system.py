@@ -538,7 +538,13 @@ def list_invites(actor_username: str) -> list:
         actor = _find_user_by_username(_load_users(), (actor_username or "").strip())
         if actor is None:
             return []
-        codes = _decode_codes(_load_invites())
+        codes = _load_invites()
+        # 自动清理：已使用（作废）的邀请码直接删除，不保留、不展示
+        kept = [c for c in codes if not c.get("used")]
+        if len(kept) != len(codes):
+            _save_invites(kept)
+            codes = kept
+        codes = _decode_codes(codes)
         out = []
         for c in codes:
             if c.get("creator") != actor.get("username"):
@@ -667,23 +673,22 @@ def register(username: str, password: str, email: str, invite_code: str,
             }
             _save_companies(companies)
 
-        # 作废邀请码，并记录创建者与账户有效期（用于「账号管理」归属判断 / 有效期）
+        # 作废邀请码（使用即删除，不保留记录；创建者与有效期已记入新账号）
         codes = _load_invites()
-        marked = False
+        used_code = None
         inv_creator = ""
         inv_expires_at = ""
         inv_valid_days = 0
         for c in codes:
             if decrypt(c.get("code_enc", "")) == (invite_code or "").strip():
-                c["used"] = True
-                c["used_by"] = username
+                used_code = c
                 inv_creator = c.get("creator", "")
                 inv_expires_at = c.get("expires_at") or ""
                 inv_valid_days = int(c.get("valid_days", 0) or 0)   # 旧数据兼容
-                marked = True
                 break
-        if not marked:
+        if used_code is None:
             return {"success": False, "message": "邀请码无效"}
+        codes = [c for c in codes if c is not used_code]
 
         # 账户有效期 = 邀请码设置的截止日期（空 = 永久；旧数据按有效天数从当前时间起算）
         expires_at = None
@@ -817,14 +822,9 @@ def disable_user(actor_username: str, user_id: str) -> dict:
 
         # 级联：admin 清除 manager → 其下用户同步清除
         if actor.get("role") == ROLE_ADMIN and target.get("role") == ROLE_MANAGER:
-            # 找出该 manager 创建并绑定了用户的二级邀请码 → 对应 user
-            codes = _load_invites()
-            bound_users = set()
-            for c in codes:
-                if c.get("creator") == target.get("username") and c.get("used") and c.get("used_by"):
-                    bound_users.add(c.get("used_by"))
+            # 该 manager 创建的账号（按用户记录 created_by，不依赖邀请码记录）
             for u in users:
-                if u.get("username") in bound_users and u.get("id") not in removed_ids:
+                if u.get("created_by") == target.get("username") and u.get("id") not in removed_ids:
                     removed_ids.add(u.get("id"))
                     removed_usernames.add(u.get("username"))
 

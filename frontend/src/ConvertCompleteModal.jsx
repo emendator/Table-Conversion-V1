@@ -12,9 +12,11 @@
  *   onReset():    转换新文件（重置会话，回到上传步骤）
  *   onClose():    关闭弹窗
  */
+import { createPortal } from 'react-dom'
+
 export default function ConvertCompleteModal({ open, outputName, downloading, onDownload, onReset, onClose }) {
     if (!open) return null
-    return (
+    return createPortal(
         <div className="done-modal-overlay" onClick={onClose}>
             <div className="done-modal" onClick={e => e.stopPropagation()}>
                 <div className="done-modal-header">
@@ -34,9 +36,10 @@ export default function ConvertCompleteModal({ open, outputName, downloading, on
                         {downloading ? '下载中...' : '📥 下载转换结果'}
                     </button>
                     <button className="btn btn-primary" disabled={downloading} onClick={onReset}>🔄 转换新文件</button>
-                    <button className="btn btn-ghost" disabled={downloading} onClick={onClose}>稍后再说</button>
+                    <button className="btn btn-ghost" disabled={downloading} onClick={onClose}>关闭</button>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body
     )
 }

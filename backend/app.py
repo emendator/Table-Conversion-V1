@@ -10,7 +10,9 @@ import uuid
 import base64
 import hashlib
 import secrets
+import threading
 from typing import Optional
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse, FileResponse, Response
@@ -45,12 +47,44 @@ from mapping_history import (
 )
 
 # ============================================================
+# 缓存定时清理（uploads / 输出）
+# ============================================================
+CLEANUP_INTERVAL = 5 * 60   # 每 5 分钟清理一次，防止缓存堆积
+CLEANUP_MAX_AGE = 1 * 3600  # 清理超过 1 小时的临时文件
+
+_cleanup_stop = threading.Event()
+
+
+def _cleanup_worker():
+    """后台定时清理线程：每 5 分钟清理 uploads 与 输出 目录的过期缓存"""
+    while not _cleanup_stop.wait(CLEANUP_INTERVAL):
+        try:
+            cleanup_old_files()
+        except Exception as e:
+            print(f"  ⚠️ 定时清理异常: {e}")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """应用生命周期：启动时开启缓存清理后台线程，退出时停止"""
+    _cleanup_stop.clear()
+    t = threading.Thread(target=_cleanup_worker, daemon=True, name="cache-cleaner")
+    t.start()
+    print("  🧹 缓存定时清理已启动（每 5 分钟）")
+    try:
+        yield
+    finally:
+        _cleanup_stop.set()
+
+
+# ============================================================
 # FastAPI 应用初始化
 # ============================================================
 app = FastAPI(
     title="表格转换工具 API",
     version="3.0",
     description="将客户发来的原始表格自动转换为公司内部参考表格格式",
+    lifespan=lifespan,
 )
 
 # CORS 配置（前后端分离必需）
@@ -68,8 +102,6 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # 初始化内置最高级管理员（admin / ***REMOVED***，公司：***REMOVED***）
 user_system.init_super_admin()
-
-CLEANUP_MAX_AGE = 24 * 3600  # 24 小时
 
 # ============================================================
 # 会话管理（基于 X-Session-Id 请求头）
@@ -376,6 +408,12 @@ async def api_invite_generate(body: InviteGenerateRequest,
 async def api_invite_list(user: dict = Depends(auth.require_manager)):
     """查看邀请码列表"""
     return {"success": True, "invites": user_system.list_invites(user["username"])}
+
+
+@app.post("/api/invite/validate")
+async def api_invite_validate(body: InviteCodeRequest):
+    """校验邀请码（只读，不修改状态）：返回 valid / level / reason（供注册页识别邀请码级别）"""
+    return {"success": True, **user_system.validate_invite(body.code)}
 
 
 @app.post("/api/invite/extend")

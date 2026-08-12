@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 
 /**
  * DeepSeek API 设置弹窗
@@ -29,7 +30,7 @@ export default function AIConfigModal({ open, forced, hasKey, maskedKey, totalTo
 
     const canSave = apiKey.trim().startsWith('sk-') && !saving
 
-    return (
+    return createPortal(
         <div className="ai-modal-overlay">
             <div className="ai-modal">
                 <div className="ai-modal-header">
@@ -79,7 +80,7 @@ export default function AIConfigModal({ open, forced, hasKey, maskedKey, totalTo
 
                 <p className="ai-modal-foot">
                     🔒 你的 API Key 只保存在你自己的电脑上，页面不会明文展示。
-                    token 消耗按账户分账户独立计算。
+                    token 消耗按账户独立统计。
                 </p>
 
                 <div className="ai-modal-actions">
@@ -91,6 +92,7 @@ export default function AIConfigModal({ open, forced, hasKey, maskedKey, totalTo
                     )}
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body
     )
 }

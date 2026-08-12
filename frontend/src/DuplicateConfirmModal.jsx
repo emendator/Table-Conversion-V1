@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 
 /**
  * 重复数据处理确认弹窗
@@ -30,7 +31,7 @@ export default function DuplicateConfirmModal({ title, hint, duplicates, onConfi
         ? duplicates
         : duplicates.filter((_, i) => checked[i])
 
-    return (
+    return createPortal(
         <div className="dup-modal-overlay">
             <div className="dup-modal">
                 <h3>{title || '⚠️ 检测到重复数据'}</h3>
@@ -103,6 +104,7 @@ export default function DuplicateConfirmModal({ title, hint, duplicates, onConfi
                     覆盖 = 用新记录替换库中同源列名的旧记录；跳过 = 保留库中原记录，不写入。
                 </p>
             </div>
-        </div>
+        </div>,
+        document.body
     )
 }

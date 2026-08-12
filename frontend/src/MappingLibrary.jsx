@@ -38,8 +38,8 @@ export default function MappingLibrary({ onGoBack }) {
         try {
             const r = await api.getMappingLibrary()
             if (r.success) setRecords(r.records || [])
-            else setMsg({ type: 'error', text: '加载失败: ' + (r.error || '') })
-        } catch (e) { setMsg({ type: 'error', text: '网络错误: ' + e.message }) }
+            else setMsg({ type: 'error', text: '加载失败：' + (r.error || '') + '，请刷新后重试' })
+        } catch (e) { setMsg({ type: 'error', text: '网络请求失败：' + e.message + '，请检查网络连接后重试' }) }
         finally { setLoading(false) }
     }, [])
 
@@ -61,8 +61,8 @@ export default function MappingLibrary({ onGoBack }) {
                 else showMsg('ok', '✅ 已添加到映射匹配库')
                 setForm({ source: '', target: '' })
                 load()
-            } else showMsg('error', '添加失败: ' + (r.error || ''))
-        } catch (e) { showMsg('error', '添加失败: ' + e.message) }
+            } else showMsg('error', '添加失败：' + (r.error || ''))
+        } catch (e) { showMsg('error', '添加失败：' + e.message + '，请重试') }
         finally { setDupProcessing(false) }
     }
 
@@ -75,7 +75,7 @@ export default function MappingLibrary({ onGoBack }) {
         if (dup) {
             setDupConfirm({
                 title: '⚠️ 源列名已存在',
-                hint: `「${src}」已在映射库中存在，目标列为「${dup.target_column}」。`,
+                hint: `「${src}」已在映射匹配库中存在，目标列为「${dup.target_column}」。`,
                 duplicates: [{ source: src, target: tgt, existing_target: dup.target_column }],
                 resolve: (mode) => {
                     setDupConfirm(null)
@@ -109,8 +109,8 @@ export default function MappingLibrary({ onGoBack }) {
                     showMsg('ok', '✅ 已更新')
                     setEditing(null)
                     load()
-                } else showMsg('error', '更新失败: ' + (r.error || ''))
-            } catch (e) { showMsg('error', '更新失败: ' + e.message) }
+                } else showMsg('error', '更新失败：' + (r.error || ''))
+            } catch (e) { showMsg('error', '更新失败：' + e.message + '，请重试') }
         }
         if (dup) {
             setDupConfirm({
@@ -139,12 +139,12 @@ export default function MappingLibrary({ onGoBack }) {
             if (r.success) {
                 showMsg('ok', '🗑️ 已删除')
                 load()
-            } else showMsg('error', '删除失败: ' + (r.error || ''))
-        } catch (e) { showMsg('error', '删除失败: ' + e.message) }
+            } else showMsg('error', '删除失败：' + (r.error || ''))
+        } catch (e) { showMsg('error', '删除失败：' + e.message + '，请重试') }
     }
 
     const handleClearAll = async () => {
-        if (!confirm('确定清空整个映射匹配库？此操作不可恢复！')) return
+        if (!confirm(`确定清空映射匹配库？\n全部 ${records.length} 条记录将被删除，且无法恢复。`)) return
         try {
             const r = await api.clearMappingLibrary()
             if (r.success) {
@@ -152,7 +152,7 @@ export default function MappingLibrary({ onGoBack }) {
                 setSelected(new Set())
                 load()
             }
-        } catch (e) { showMsg('error', '清空失败: ' + e.message) }
+        } catch (e) { showMsg('error', '清空失败：' + e.message + '，请重试') }
     }
 
     // ========== 多选 ==========
@@ -183,15 +183,15 @@ export default function MappingLibrary({ onGoBack }) {
     const handleBatchDelete = async () => {
         const ids = Array.from(selected)
         if (!ids.length) return
-        if (!confirm(`确定删除选中的 ${ids.length} 条记录？`)) return
+        if (!confirm(`将删除选中的 ${ids.length} 条映射记录，删除后无法恢复。确定继续？`)) return
         try {
             const r = await api.batchDeleteMappingRecords(ids)
             if (r.success) {
                 showMsg('ok', `🗑️ 已删除 ${r.deleted} 条记录`)
                 setSelected(new Set())
                 load()
-            } else showMsg('error', '批量删除失败: ' + (r.error || ''))
-        } catch (e) { showMsg('error', '批量删除失败: ' + e.message) }
+            } else showMsg('error', '批量删除失败：' + (r.error || ''))
+        } catch (e) { showMsg('error', '批量删除失败：' + e.message + '，请重试') }
     }
 
     // ========== 导出（Excel 表格） ==========
@@ -234,7 +234,7 @@ export default function MappingLibrary({ onGoBack }) {
             if (duplicates.length > 0) {
                 setDupConfirm({
                     title: '⚠️ 导入存在重复数据',
-                    hint: `待导入的 ${recordsToImport.length} 条记录中，有 ${duplicates.length} 条源列名已存在于映射库。`,
+                    hint: `待导入的 ${recordsToImport.length} 条记录中，有 ${duplicates.length} 条源列名已存在于映射匹配库。`,
                     duplicates,
                     resolve: async (mode, selectedDups) => {
                         setDupConfirm(null)
@@ -273,17 +273,17 @@ export default function MappingLibrary({ onGoBack }) {
     return (
         <div className="library-page">
             <div className="library-header">
-                <h2>📚 映射匹配库</h2>
+                <h2><span aria-hidden="true">📚</span> <span className="page-title-text">映射匹配库</span></h2>
                 <p className="section-hint">
                     管理列名映射记录。匹配时优先按此库中的记录匹配，AI 只处理剩余的列。
-                    未修改的 AI 匹配结果与勾选了「加入映射库」的映射会自动存入此库。
+                    未修改的 AI 匹配结果与勾选了「加入库」的映射会自动存入此库。
                 </p>
             </div>
 
             {msg && <div className={`match-status ${msg.type === 'ok' ? 'success' : msg.type}`}>{msg.text}</div>}
 
             {/* 新增表单 */}
-            <CollapsibleSection title="➕ 新增映射记录" summary="填写源列名与目标列名，一键加入映射库">
+            <CollapsibleSection title="➕ 新增映射记录" summary="填写源列名与目标列名，一键存入映射匹配库">
                 <div className="library-add-row">
                     <input
                         className="lib-input"
@@ -355,7 +355,21 @@ export default function MappingLibrary({ onGoBack }) {
                             {loading ? (
                                 <tr><td colSpan={9} style={{ textAlign: 'center', color: '#94A3B8', padding: 24 }}>加载中...</td></tr>
                             ) : filtered.length === 0 ? (
-                                <tr><td colSpan={9} style={{ textAlign: 'center', color: '#94A3B8', padding: 24 }}>暂无记录{search ? '（无匹配搜索结果）' : ''}</td></tr>
+                                <tr>
+                                    <td colSpan={9} style={{ padding: 0 }}>
+                                        <div className="empty-state">
+                                            <div className="empty-icon">{search ? '🔍' : '🗂️'}</div>
+                                            <p className="empty-title">
+                                                {search ? '没有匹配的搜索结果' : '映射库还是空的'}
+                                            </p>
+                                            <p className="empty-hint">
+                                                {search
+                                                    ? '换个关键词试试，或清空搜索框。'
+                                                    : '在上方「新增映射记录」中填写源列名与目标列名，或让 AI 匹配结果一键入库。'}
+                                            </p>
+                                        </div>
+                                    </td>
+                                </tr>
                             ) : filtered.map((r, i) => (
                                 <tr key={r.id || i} className={selected.has(r.id) ? 'row-selected' : ''}>
                                     <td className="col-check">

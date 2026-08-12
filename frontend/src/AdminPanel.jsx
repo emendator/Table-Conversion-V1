@@ -25,7 +25,7 @@ export default function AdminPanel({ user, onGoBack }) {
     const [invLevel, setInvLevel] = useState(2)
     const [invExpire, setInvExpire] = useState(defaultExpire())
     const [newInvite, setNewInvite] = useState(null)
-    // 公司数据库密码（映射库隔离凭证）
+    // 公司数据库密码（映射匹配库隔离凭证）
     const [companyInfo, setCompanyInfo] = useState(null)
     const [newCompanyPwd, setNewCompanyPwd] = useState('')
 
@@ -55,10 +55,7 @@ export default function AdminPanel({ user, onGoBack }) {
     }
 
     const handleDeleteInvite = async (iv) => {
-        const tip = iv.used
-            ? `确认删除已使用的邀请码「${iv.code}」？（仅清理记录）`
-            : `确认删除邀请码「${iv.code}」？删除后该邀请码将不可使用。`
-        if (!window.confirm(tip)) return
+        if (!window.confirm(`确认删除邀请码「${iv.code}」？删除后该邀请码将不可使用。`)) return
         const res = await api.deleteInvite(iv.code)
         if (res.success) showMsg('ok', res.message || '已删除')
         else showMsg('error', res.detail || res.message || '删除失败')
@@ -102,7 +99,7 @@ export default function AdminPanel({ user, onGoBack }) {
     return (
         <div className="admin-panel">
             <div className="admin-header">
-                <h2>👥 用户与邀请码管理</h2>
+                <h2><span aria-hidden="true">👥</span> <span className="page-title-text">用户与邀请码管理</span></h2>
                 <button className="btn btn-outline" onClick={onGoBack}>← 返回转换工具</button>
             </div>
 
@@ -112,6 +109,9 @@ export default function AdminPanel({ user, onGoBack }) {
             {/* ===== 邀请码管理 ===== */}
             <section className="card admin-section">
                 <h3>🎫 邀请码管理</h3>
+                <p className="section-hint">
+                    邀请码为一次性使用，注册成功后自动作废并清除，列表仅展示未使用的邀请码。
+                </p>
                 <div className="admin-invite-form">
                     <label>角色
                         <select value={invLevel} onChange={e => setInvLevel(Number(e.target.value))} disabled={user.role !== 'admin'}>
@@ -138,20 +138,18 @@ export default function AdminPanel({ user, onGoBack }) {
                     <table className="admin-table">
                         <thead>
                             <tr>
-                                <th>邀请码</th><th>角色</th><th>创建者</th><th>状态</th>
-                                <th>绑定账号</th><th>创建时间</th><th>账户有效期</th><th>操作</th>
+                                <th>邀请码</th><th>角色</th><th>创建者</th>
+                                <th>创建时间</th><th>账户有效期</th><th>操作</th>
                             </tr>
                         </thead>
                         <tbody>
                             {invites.length === 0 ? (
-                                <tr><td colSpan={8} style={{ textAlign: 'center', color: '#94A3B8', padding: 16 }}>暂无邀请码</td></tr>
+                                <tr><td colSpan={6} style={{ textAlign: 'center', color: '#94A3B8', padding: 16 }}>暂无邀请码</td></tr>
                             ) : invites.map((iv, i) => (
                                 <tr key={i}>
                                     <td><code className="admin-code">{iv.code}</code></td>
                                     <td>{iv.level === 1 ? '管理员' : '用户'}</td>
                                     <td>{iv.creator}</td>
-                                    <td>{iv.used ? <span className="badge-used">已使用</span> : <span className="badge-unused">未使用</span>}</td>
-                                    <td>{iv.used_by || '—'}</td>
                                     <td>{iv.created_at}</td>
                                     <td>{iv.expires_at ? `至 ${iv.expires_at}` : (iv.valid_days ? `注册后 ${iv.valid_days} 天` : '永久')}</td>
                                     <td className="admin-actions">
@@ -211,9 +209,9 @@ export default function AdminPanel({ user, onGoBack }) {
 
             {/* ===== 公司数据库密码（映射库隔离凭证） ===== */}
             <section className="card admin-section">
-                <h3>🔐 公司数据库密码（映射库隔离凭证）</h3>
+                <h3>🔐 公司数据库密码（映射匹配库隔离凭证）</h3>
                 <p className="section-hint">
-                    映射库按「公司名 + 公司数据库密码」隔离。新用户加入本公司时需填写正确的公司数据库密码；
+                    映射匹配库按「公司名 + 公司数据库密码」隔离。新用户加入本公司时需填写正确的公司数据库密码；
                     公司名不存在时，仅管理员可创建新公司并设置密码。
                 </p>
                 <div className="admin-invite-form">
@@ -236,8 +234,8 @@ export default function AdminPanel({ user, onGoBack }) {
                     </button>
                 </div>
                 <p className="section-hint">
-                    修改后，本公司所有用户的访问键将同步更新、映射库数据自动迁移，
-                    请将新密码告知公司成员；修改前请确认已知晓新密码。
+                    修改后，本公司所有成员的登录凭证会同步更新，映射匹配库数据将自动迁移，
+                    请将新密码告知公司成员，确认已妥善保管后再保存。
                 </p>
             </section>
         </div>

@@ -1,4 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { createPortal } from 'react-dom'
 import './App.css'
 import * as api from './api'
 import MappingLibrary from './MappingLibrary'
@@ -199,8 +201,8 @@ function App() {
       if (result.success) {
         setSourceFiles(result.files || [])
         setSourceReady(true)
-      } else alert('上传失败: ' + result.error)
-    } catch (e) { alert('网络错误: ' + e.message) }
+      } else alert('上传失败：' + result.error)
+    } catch (e) { alert('网络请求失败：' + e.message + '，请检查网络连接后重试') }
     finally { setLoading(false) }
   }, [])
 
@@ -213,8 +215,8 @@ function App() {
       if (result.success) {
         setReferenceMeta(result)
         setReferenceReady(true)
-      } else alert('上传失败: ' + result.error)
-    } catch (e) { alert('网络错误: ' + e.message) }
+      } else alert('上传失败：' + result.error)
+    } catch (e) { alert('网络请求失败：' + e.message + '，请检查网络连接后重试') }
     finally { setLoading(false) }
   }, [])
 
@@ -235,8 +237,8 @@ function App() {
         if (!result.files || result.files.length === 0) {
           setSourceReady(false)
         }
-      } else alert('删除失败: ' + result.error)
-    } catch (e) { alert('网络错误: ' + e.message) }
+      } else alert('删除失败：' + result.error)
+    } catch (e) { alert('网络请求失败：' + e.message + '，请检查网络连接后重试') }
     finally { setLoading(false) }
   }, [])
 
@@ -288,10 +290,10 @@ function App() {
         setAIConfigOpen(false); setAIConfigForced(false)
         setMatchStatus(null); setConvertStatus(null)
       } else {
-        alert('保存失败: ' + ((res && res.detail) || '未知错误'))
+        alert('保存失败：' + ((res && res.detail) || '未知错误'))
       }
     } catch (e) {
-      alert('保存失败: ' + e.message)
+      alert('保存失败：' + e.message + '，请重试')
     } finally { setAISaving(false) }
   }, [aiConfig.nonce, refreshAIConfig])
 
@@ -330,7 +332,7 @@ function App() {
         setMatchCollapsed(true)   // 匹配完成自动收起上传/AI 模块
         if (useAI) refreshAIConfig()  // 刷新当前 Key 的总消耗
       } else setMatchStatus({ type: 'error', text: '❌ ' + result.error })
-    } catch (e) { setMatchStatus({ type: 'error', text: '❌ 网络错误: ' + e.message }) }
+    } catch (e) { setMatchStatus({ type: 'error', text: '❌ 网络请求失败：' + e.message + '，请检查网络连接后重试' }) }
     finally { setLoading(false) }
   }, [useAI, aiConfig, refreshAIConfig, openAIConfig])
 
@@ -402,7 +404,7 @@ function App() {
 
   // ========== 转换 ==========
   const doConvert = useCallback(async (onDuplicate) => {
-    setLoading(true); setLoadingText('正在转换表格...'); setConvertStatus(null)
+    setLoading(true); setLoadingText('正在按映射关系生成转换结果...'); setConvertStatus(null)
     try {
       const result = await api.runConvert(mappings, onDuplicate)
       if (result.success) {
@@ -411,7 +413,7 @@ function App() {
         setStep(3)
         setConvertDoneOpen(true)
       } else setConvertStatus({ type: 'error', text: '❌ ' + result.error })
-    } catch (e) { setConvertStatus({ type: 'error', text: '❌ 网络错误: ' + e.message }) }
+    } catch (e) { setConvertStatus({ type: 'error', text: '❌ 网络请求失败：' + e.message + '，请检查网络连接后重试' }) }
     finally { setLoading(false) }
   }, [mappings])
 
@@ -445,7 +447,7 @@ function App() {
   const handleDownload = useCallback(async () => {
     if (!outputName || downloading) return
     setDownloading(true)
-    try { await api.downloadFile(outputName) } catch (e) { alert('下载失败: ' + e.message) }
+    try { await api.downloadFile(outputName) } catch (e) { alert('下载失败：' + e.message + '，请重试') }
     finally { setDownloading(false) }
   }, [outputName, downloading])
 
@@ -515,7 +517,7 @@ function App() {
             )}
           </nav>
           <div className="header-title">
-            <h1>📊 表格转换工具</h1>
+            <h1><span className="header-logo" aria-hidden="true">📊</span><span className="header-title-text">表格转换工具</span></h1>
             <p className="subtitle">智能匹配列名 · 自动转换格式 · 公式保留</p>
           </div>
           <div className="header-actions header-right">
@@ -543,17 +545,68 @@ function App() {
       {currentUser.is_guest && (
         <div className="guest-notice">
           🚪 <b>游客模式 · 不保留任何数据</b>
-          <span>退出登录后，账号、映射库、API Key、上传/输出文件等所有数据将被自动清除，不会保留</span>
+          <span>退出登录后，账号、映射匹配库、API Key、上传与输出文件等所有数据将被自动清除</span>
         </div>
       )}
 
-      {view === 'admin' ? (
-        <AdminPanel user={currentUser} onGoBack={() => setView('tool')} />
-      ) : view === 'library' ? (
-        <MappingLibrary onGoBack={() => setView('tool')} />
-      ) : (
-        <>
-          <main>
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={view}
+          className="view-reveal"
+          initial={{ opacity: 0, filter: 'blur(16px)', scale: 0.998 }}
+          animate={{ opacity: 1, filter: 'blur(0px)', scale: 1 }}
+          exit={{ opacity: 0, filter: 'blur(16px)', scale: 0.998 }}
+          transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+        >
+          {view === 'admin' ? (
+            <AdminPanel user={currentUser} onGoBack={() => setView('tool')} />
+          ) : view === 'library' ? (
+            <MappingLibrary onGoBack={() => setView('tool')} />
+          ) : (
+            <main>
+              {/* ======== 数据概览 ======== */}
+              <div className="overview-bar" aria-label="数据概览">
+                <div className="overview-item">
+                  <span className="overview-ico">📄</span>
+                  <div>
+                    <div className="overview-num">{sourceFiles.length}</div>
+                    <div className="overview-label">源文件</div>
+                  </div>
+                </div>
+                <div className="overview-item">
+                  <span className="overview-ico">🔢</span>
+                  <div>
+                    <div className="overview-num">{totalRows}</div>
+                    <div className="overview-label">总行数</div>
+                  </div>
+                </div>
+                <div className="overview-item">
+                  <span className="overview-ico">📋</span>
+                  <div>
+                    <div className="overview-num">{referenceReady ? '✓' : '—'}</div>
+                    <div className="overview-label">{referenceReady ? '参考模板就绪' : '参考模板'}</div>
+                  </div>
+                </div>
+              </div>
+
+            {/* ======== 步骤指示器 ======== */}
+            <div className="stepper" aria-label="转换步骤">
+              <div className={`step ${step >= 2 ? 'done' : ''} ${step === 1 ? 'current' : ''}`}>
+                <span className="step-num">1</span>
+                <span className="step-label">上传文件</span>
+              </div>
+              <div className="step-line" aria-hidden="true" />
+              <div className={`step ${step >= 3 ? 'done' : ''} ${step === 2 ? 'current' : ''}`}>
+                <span className="step-num">2</span>
+                <span className="step-label">匹配列名</span>
+              </div>
+              <div className="step-line" aria-hidden="true" />
+              <div className={`step ${step === 3 ? 'current' : ''}`}>
+                <span className="step-num">3</span>
+                <span className="step-label">预览转换</span>
+              </div>
+            </div>
+
             {/* ======== 步骤1: 上传文件 ======== */}
             <CollapsibleSection
               title="📤 上传文件"
@@ -691,7 +744,7 @@ function App() {
                         <th className="col-arrow" />
                         <th className="col-tgt">参考表格列名</th>
                         <th className="col-formula">公式处理</th>
-                        <th className="col-lib">加入映射库</th>
+                        <th className="col-lib">加入库</th>
                         <th className="col-act">操作</th>
                       </tr>
                     </thead>
@@ -869,21 +922,23 @@ function App() {
               </CollapsibleSection>
             )}
           </main>
-        </>
-      )}
+          )}
+        </motion.div>
+      </AnimatePresence>
 
-      {/* 加载遮罩 */}
-      {loading && (
+      {/* 加载遮罩：portal 到 body，避免被 .app 的 filter 捕获导致 fixed 定位失效（跑到长页面居中） */}
+      {loading && createPortal(
         <div className="overlay">
           <div className="spinner" />
           <p>{loadingText}</p>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* 转换前重复数据确认弹窗 */}
       {dupConfirm && (
         <DuplicateConfirmModal
-          title="⚠️ 将保存到映射库的映射存在重复"
+          title="⚠️ 将保存到映射匹配库的映射存在重复"
           hint={dupConfirm.saveableCount > 0
             ? `本次转换完成后将有 ${dupConfirm.saveableCount} 条映射写入映射匹配库，其中 ${dupConfirm.duplicates.length} 条原始列名已存在。`
             : '检测到部分映射的原始列名已存在于映射匹配库中。'}

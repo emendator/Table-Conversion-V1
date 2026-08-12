@@ -66,6 +66,18 @@ function handleUnauthorized() {
     } catch (e) { /* 非浏览器环境忽略 */ }
 }
 
+/**
+ * 捕获 fetch 网络错误（Failed to fetch / 连接被拒），转为友好中文提示
+ * 根因通常是：后端服务未启动、端口不对、或访问地址未走 /api 代理
+ */
+async function safeFetch(url, options = {}) {
+    try {
+        return await fetch(url, options);
+    } catch {
+        throw new Error('无法连接服务器，请确认后端服务已启动（端口 8004）');
+    }
+}
+
 async function api(url, options = {}) {
     const token = getToken();
     const headers = {
@@ -74,7 +86,7 @@ async function api(url, options = {}) {
         ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
         ...(options.headers || {}),
     };
-    const res = await fetch(url, { ...options, headers });
+    const res = await safeFetch(url, { ...options, headers });
     // 401：登录失效，清理令牌并通知路由守卫跳转登录页
     if (res.status === 401) handleUnauthorized();
     const text = await res.text();
@@ -83,38 +95,21 @@ async function api(url, options = {}) {
         if (data.sessionId) localStorage.setItem(SESSION_KEY, data.sessionId);
         return data;
     } catch {
-        throw new Error(`服务器错误 (${res.status}): ${text.substring(0, 200)}`);
+        // 后端返回了 HTML（如 404/502 错误页或 index.html）而非 JSON
+        throw new Error(`服务器返回异常 (${res.status})，请确认后端服务已启动、接口地址正确`);
     }
 }
 
 export async function uploadSource(files) {
     const formData = new FormData();
     files.forEach(f => formData.append('files', f));
-    const res = await fetch('/api/upload/source', {
-        method: 'POST',
-        body: formData,
-        headers: { 'X-Session-Id': getSessionId(), ...(getToken() ? { 'Authorization': `Bearer ${getToken()}` } : {}) },
-    });
-    if (res.status === 401) handleUnauthorized();
-    const text = await res.text();
-    const data = JSON.parse(text);
-    if (data.sessionId) localStorage.setItem(SESSION_KEY, data.sessionId);
-    return data;
+    return api('/api/upload/source', { method: 'POST', body: formData });
 }
 
 export async function uploadReference(file) {
     const formData = new FormData();
     formData.append('file', file);
-    const res = await fetch('/api/upload/reference', {
-        method: 'POST',
-        body: formData,
-        headers: { 'X-Session-Id': getSessionId(), ...(getToken() ? { 'Authorization': `Bearer ${getToken()}` } : {}) },
-    });
-    if (res.status === 401) handleUnauthorized();
-    const text = await res.text();
-    const data = JSON.parse(text);
-    if (data.sessionId) localStorage.setItem(SESSION_KEY, data.sessionId);
-    return data;
+    return api('/api/upload/reference', { method: 'POST', body: formData });
 }
 
 export async function clearSource() {
@@ -241,11 +236,11 @@ export async function saveAIConfig(apiKeyEnc) {
 }
 
 export async function downloadFile(filename) {
-    const res = await fetch('/api/download', {
+    const res = await safeFetch('/api/download', {
         headers: { 'X-Session-Id': getSessionId(), ...(getToken() ? { 'Authorization': `Bearer ${getToken()}` } : {}) },
     });
     if (res.status === 401) handleUnauthorized();
-    if (!res.ok) throw new Error('下载失败');
+    if (!res.ok) throw new Error('下载失败，请确认后端服务已启动');
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -303,11 +298,11 @@ export async function clearMappingLibrary() {
 
 export async function exportMappingLibrary() {
     /* 导出为 Excel 表格 (.xlsx) 并触发下载 */
-    const res = await fetch('/api/mapping-library/export', {
+    const res = await safeFetch('/api/mapping-library/export', {
         headers: { 'X-Session-Id': getSessionId(), ...(getToken() ? { 'Authorization': `Bearer ${getToken()}` } : {}) },
     });
     if (res.status === 401) handleUnauthorized();
-    if (!res.ok) throw new Error('导出失败');
+    if (!res.ok) throw new Error('导出失败，请确认后端服务已启动');
     const blob = await res.blob();
     const cd = res.headers.get('Content-Disposition') || '';
     let filename = `映射匹配库_${new Date().toISOString().slice(0, 10)}.xlsx`;
@@ -327,7 +322,7 @@ export async function parseMappingImportFile(file) {
     /* 上传表格文件(.xlsx/.xls/.csv)，由后端解析出映射记录 */
     const formData = new FormData();
     formData.append('file', file);
-    const res = await fetch('/api/mapping-library/import/parse', {
+    const res = await safeFetch('/api/mapping-library/import/parse', {
         method: 'POST',
         body: formData,
         headers: { 'X-Session-Id': getSessionId(), ...(getToken() ? { 'Authorization': `Bearer ${getToken()}` } : {}) },
@@ -337,7 +332,7 @@ export async function parseMappingImportFile(file) {
     try {
         return JSON.parse(text);
     } catch {
-        throw new Error(`解析失败 (${res.status})`);
+        throw new Error(`解析失败 (${res.status})，请确认后端服务已启动`);
     }
 }
 
@@ -394,6 +389,11 @@ export async function extendInvite(code, expiresAt) {
 
 export async function deleteInvite(code) {
     return api('/api/invite/delete', { method: 'POST', body: JSON.stringify({ code }) });
+}
+
+/** 校验邀请码（注册页识别级别：level 1=管理员 2=用户） */
+export async function validateInvite(code) {
+    return api('/api/invite/validate', { method: 'POST', body: JSON.stringify({ code }) });
 }
 
 /* ===================== 用户管理（admin / manager） ===================== */
