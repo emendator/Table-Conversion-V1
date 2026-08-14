@@ -10,6 +10,11 @@ import CollapsibleSection from './CollapsibleSection'
 import ConvertCompleteModal from './ConvertCompleteModal'
 import AuthPage from './AuthPage'
 import AdminPanel from './AdminPanel'
+import CountUp from './effects/CountUp.jsx'
+import ScrollProgress from './effects/ScrollProgress.jsx'
+
+// 映射行稳定唯一 id（供 AnimatePresence 精确识别行的增删，实现 FLIP 式平滑过渡）
+let mapUid = 0
 
 const CONF_LABELS = { high: '高', medium: '中', low: '低', manual: '手动' }
 
@@ -320,7 +325,7 @@ function App() {
       if (result.success) {
         // AI 匹配结果默认加入库；记录 base_add_to_library（原始入库意愿），
         // 供切回默认公式处理时恢复「已在库中」状态
-        setMappings((result.mappings || []).map(m => ({ ...m, base_add_to_library: m.add_to_library !== false })))
+        setMappings((result.mappings || []).map(m => ({ ...m, uid: ++mapUid, base_add_to_library: m.add_to_library !== false })))
         setTargetOptions(result.targetOptions)
         setSourceHeaders(result.sourceHeaders)
         setSourceFormulaCols(result.sourceFormulaColumns || [])
@@ -385,6 +390,7 @@ function App() {
     if (!src) return
     const isS = isFormulaCol(src, sourceFormulaCols)
     setMappings(prev => [...prev, {
+      uid: ++mapUid,
       source: src,
       target: '',
       confidence: 'manual',
@@ -498,6 +504,7 @@ function App() {
 
   return (
     <div className="app">
+      <ScrollProgress />
       <header className="header">
         <div className="header-main">
           <nav className="header-nav header-left">
@@ -566,21 +573,21 @@ function App() {
             <main>
               {/* ======== 数据概览 ======== */}
               <div className="overview-bar" aria-label="数据概览">
-                <div className="overview-item">
+                <div className="overview-item" data-tilt>
                   <span className="overview-ico">📄</span>
                   <div>
-                    <div className="overview-num">{sourceFiles.length}</div>
+                    <CountUp className="overview-num" value={sourceFiles.length} />
                     <div className="overview-label">源文件</div>
                   </div>
                 </div>
-                <div className="overview-item">
+                <div className="overview-item" data-tilt>
                   <span className="overview-ico">🔢</span>
                   <div>
-                    <div className="overview-num">{totalRows}</div>
+                    <CountUp className="overview-num" value={totalRows} />
                     <div className="overview-label">总行数</div>
                   </div>
                 </div>
-                <div className="overview-item">
+                <div className="overview-item" data-tilt>
                   <span className="overview-ico">📋</span>
                   <div>
                     <div className="overview-num">{referenceReady ? '✓' : '—'}</div>
@@ -589,347 +596,382 @@ function App() {
                 </div>
               </div>
 
-            {/* ======== 步骤指示器 ======== */}
-            <div className="stepper" aria-label="转换步骤">
-              <div className={`step ${step >= 2 ? 'done' : ''} ${step === 1 ? 'current' : ''}`}>
-                <span className="step-num">1</span>
-                <span className="step-label">上传文件</span>
-              </div>
-              <div className="step-line" aria-hidden="true" />
-              <div className={`step ${step >= 3 ? 'done' : ''} ${step === 2 ? 'current' : ''}`}>
-                <span className="step-num">2</span>
-                <span className="step-label">匹配列名</span>
-              </div>
-              <div className="step-line" aria-hidden="true" />
-              <div className={`step ${step === 3 ? 'current' : ''}`}>
-                <span className="step-num">3</span>
-                <span className="step-label">预览转换</span>
-              </div>
-            </div>
-
-            {/* ======== 步骤1: 上传文件 ======== */}
-            <CollapsibleSection
-              title="📤 上传文件"
-              collapsed={matchCollapsed}
-              actions={
-                <button className="btn btn-sm btn-outline" onClick={handleReset}>🔄 转换新文件</button>
-              }
-              summary={
-                !sourceReady && !referenceReady
-                  ? '尚未上传文件'
-                  : `${sourceFiles.length} 个源文件 · ${totalRows} 行` +
-                  (referenceReady ? ` · 参考: ${referenceMeta.filename}` : '')
-              }
-            >
-              <div className="upload-grid">
-                {/* 原始表格 */}
-                <div className="upload-box">
-                  {!sourceReady ? (
-                    <div className="upload-zone"
-                      onClick={() => sourceInputRef.current?.click()}
-                      onDragOver={e => e.preventDefault()}
-                      onDrop={e => { e.preventDefault(); handleSourceUpload(e.dataTransfer.files) }}>
-                      <div className="upload-icon">📄</div>
-                      <p className="upload-title">原始表格（客户发来的）</p>
-                      <p className="upload-hint">拖拽文件到此处，或点击选择（可多选）</p>
-                      <p className="upload-formats">支持 .xlsx / .xls · 可一次选择多个文件</p>
-                      <input ref={sourceInputRef} type="file" accept=".xlsx,.xls" multiple hidden
-                        onChange={e => handleSourceUpload(e.target.files)} />
-                    </div>
-                  ) : (
-                    <div className="upload-info">
-                      <div className="source-file-list">
-                        <div className="source-file-summary">
-                          {sourceFiles.length} 个文件 · 共 {totalRows} 行
-                        </div>
-                        {sourceFiles.map((f, i) => (
-                          <div key={f.filename || i} className="source-file-item">
-                            <span className="sf-name">📄 {esc(f.filename || f.name)}</span>
-                            <span className="sf-meta">{f.rows} 行 · {(f.headers || []).length} 列</span>
-                            <button className="btn-icon" title="删除该文件"
-                              onClick={() => handleDeleteSource(f.filename)}>✕</button>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="source-actions">
-                        <button className="btn btn-sm btn-outline" onClick={() => sourceInputRef.current?.click()}>
-                          ➕ 添加文件
-                        </button>
-                        <input ref={sourceInputRef} type="file" accept=".xlsx,.xls" multiple hidden
-                          onChange={e => handleSourceUpload(e.target.files)} />
-                        <button className="btn-icon" onClick={handleClearSource}>✕ 清空</button>
-                      </div>
-                    </div>
-                  )}
+              {/* ======== 步骤指示器 ======== */}
+              <div className="stepper" aria-label="转换步骤">
+                <div className={`step ${step >= 2 ? 'done' : ''} ${step === 1 ? 'current' : ''}`}>
+                  <span className="step-num">1</span>
+                  <span className="step-label">上传文件</span>
                 </div>
-
-                {/* 参考模板 */}
-                <div className="upload-box">
-                  {!referenceReady ? (
-                    <div className="upload-zone"
-                      onClick={() => refInputRef.current?.click()}
-                      onDragOver={e => e.preventDefault()}
-                      onDrop={e => { e.preventDefault(); handleRefUpload(e.dataTransfer.files[0]) }}>
-                      <div className="upload-icon">📋</div>
-                      <p className="upload-title">参考模板（公司内部格式）</p>
-                      <p className="upload-hint">拖拽文件到此处，或点击选择</p>
-                      <p className="upload-formats">支持 .xlsx / .xls</p>
-                      <input ref={refInputRef} type="file" accept=".xlsx,.xls" hidden
-                        onChange={e => handleRefUpload(e.target.files[0])} />
-                    </div>
-                  ) : (
-                    <div className="upload-info" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span className="file-icon">📋</span>
-                      <span className="file-name">{referenceMeta.filename}</span>
-                      <span className="file-meta">{referenceMeta.headers.length} 列 · {referenceMeta.formulaCount} 公式列</span>
-                      <button className="btn-icon" onClick={handleClearRef}>✕</button>
-                    </div>
-                  )}
+                <div className="step-line" aria-hidden="true" />
+                <div className={`step ${step >= 3 ? 'done' : ''} ${step === 2 ? 'current' : ''}`}>
+                  <span className="step-num">2</span>
+                  <span className="step-label">匹配列名</span>
+                </div>
+                <div className="step-line" aria-hidden="true" />
+                <div className={`step ${step === 3 ? 'current' : ''}`}>
+                  <span className="step-num">3</span>
+                  <span className="step-label">预览转换</span>
                 </div>
               </div>
 
-              {sourceReady && referenceReady && step === 1 && (
-                <div style={{ textAlign: 'center', marginTop: 16 }}>
-                  <button className="btn btn-primary" onClick={() => { setStep(2); setMatchCollapsed(false); setMatchStatus(null) }}>下一步 → 匹配</button>
-                </div>
-              )}
-            </CollapsibleSection>
-
-            {/* ======== 步骤2: AI 匹配 ======== */}
-            {step >= 2 && (
+              {/* ======== 步骤1: 上传文件 ======== */}
               <CollapsibleSection
-                title="🤖 AI 智能列匹配"
+                title="📤 上传文件"
                 collapsed={matchCollapsed}
-                summary={mappings.length > 0 ? `已匹配 ${mappings.length} 列` : '未开始匹配'}
-              >
-                <div className="match-controls">
-                  <label className="toggle">
-                    <input type="checkbox" checked={useAI}
-                      onChange={e => {
-                        const on = e.target.checked
-                        setUseAI(on); setStep(2); setMappings([])
-                        // 开启 AI 但未配置 Key → 强制打开 API 设置
-                        if (on && !aiConfig.hasKey) {
-                          setMatchStatus({ type: 'error', text: '使用 AI 匹配前请先配置 DeepSeek API Key' })
-                          openAIConfig(true)
-                        }
-                      }} />
-                    <span className="toggle-slider" />
-                    <span className="toggle-label">使用 DeepSeek AI 匹配</span>
-                  </label>
-                  <button className="btn btn-primary" onClick={handleMatch}>🔍 开始匹配</button>
-                </div>
-                {matchStatus && <div className={`match-status ${matchStatus.type}`}>{matchStatus.text}</div>}
-              </CollapsibleSection>
-            )}
-
-            {/* ======== 步骤3: 预览调整 ======== */}
-            {step >= 3 && (
-              <CollapsibleSection
-                title="📝 映射预览与调整"
-                summary={`${mappings.length} 条映射` + (unmapped.length ? ` · ${unmapped.length} 列未匹配` : '')}
-              >
-                <p className="section-hint">
-                  确认或调整列名映射关系，然后点击转换。
-                  未修改的 AI 匹配结果会自动存入映射匹配库；调整/手动添加的映射需勾选「加入库」才会存入。
-                </p>
-
-                <div className="mapping-table-wrap">
-                  <table className="mapping-table">
-                    <thead>
-                      <tr>
-                        <th className="col-idx">#</th>
-                        <th className="col-conf">匹配度</th>
-                        <th className="col-src">原始表格列名</th>
-                        <th className="col-arrow" />
-                        <th className="col-tgt">参考表格列名</th>
-                        <th className="col-formula">公式处理</th>
-                        <th className="col-lib">加入库</th>
-                        <th className="col-act">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {mappings.length === 0 ? (
-                        <tr><td colSpan={8} style={{ textAlign: 'center', color: '#94A3B8', padding: 20 }}>暂无匹配结果</td></tr>
-                      ) : mappings.map((m, i) => {
-                        const used = mappings.filter((_, idx) => idx !== i).map(mm => mm.source)
-                        const formulaOpts = formulaOptions(m)
-                        return (
-                          <tr key={i} className={(m.source_is_formula || m.target_is_formula) ? 'row-formula' : ''}>
-                            <td className="col-idx">{i + 1}</td>
-                            <td className="col-conf">
-                              <span className={`conf-badge conf-${m.confidence}`} title={m.reason}>
-                                {CONF_LABELS[m.confidence] || m.confidence}
-                              </span>
-                            </td>
-                            <td className="col-src">
-                              <div className="col-name-wrap">
-                                <select className="source-select" value={m.source} onChange={e => {
-                                  updateMapping(i, 'source', e.target.value)
-                                }}>
-                                  {sourceHeaders.map((h, si) => {
-                                    const cleanH = (h || '').replace(/\n/g, '').trim()
-                                    const cleanSrc = (m.source || '').replace(/\n/g, '').trim()
-                                    const isF = isFormulaCol(h, sourceFormulaCols)
-                                    return (
-                                      <option key={`src-${si}`} value={h}
-                                        disabled={cleanH !== cleanSrc && used.includes(h)}>
-                                        {isF ? 'ƒ ' : ''}{esc(h || '(空)')}
-                                      </option>
-                                    )
-                                  })}
-                                </select>
-                                {isFormulaCol(m.source, sourceFormulaCols) && (
-                                  <span className="formula-tag" title="该列是原始表格中的公式列">ƒ 公式</span>
-                                )}
-                              </div>
-                            </td>
-                            <td className="col-arrow">→</td>
-                            <td className="col-tgt">
-                              <div className="col-name-wrap">
-                                <select className="target-select" value={m.target}
-                                  onChange={e => updateMapping(i, 'target', e.target.value)}>
-                                  <option value="">-- 不映射 --</option>
-                                  {targetOptions.map((h, ti) => (
-                                    <option key={`tgt-${ti}`} value={h}>
-                                      {isFormulaCol(h, targetFormulaCols) ? 'ƒ ' : ''}{esc(h || '(空)')}
-                                    </option>
-                                  ))}
-                                </select>
-                                {isFormulaCol(m.target, targetFormulaCols) && (
-                                  <span className="formula-tag" title="该列是参考表格中的公式列">ƒ 公式</span>
-                                )}
-                              </div>
-                            </td>
-                            <td className="col-formula">
-                              {formulaOpts ? (
-                                <select
-                                  className="formula-select"
-                                  value={m.formula_action || 'default'}
-                                  onChange={e => updateMapping(i, 'formula_action', e.target.value)}
-                                  title={formulaOpts.hint}
-                                >
-                                  {formulaOpts.options.map(o => (
-                                    <option key={o.value} value={o.value}>{o.label}</option>
-                                  ))}
-                                </select>
-                              ) : (
-                                <span className="formula-none">—</span>
-                              )}
-                            </td>
-                            <td className="col-lib">
-                              {m.add_to_library && isMappingInLibrary(m, libraryPairs) ? (
-                                <span className="lib-existing"
-                                  title="该映射的源列名与目标列名均已存在于映射匹配库中">✅ 已在库中</span>
-                              ) : (
-                                <label className="lib-checkbox"
-                                  title={m.add_to_library ? '勾选：转换后加入映射匹配库' : '未勾选：转换后不加入映射匹配库'}>
-                                  <input
-                                    type="checkbox"
-                                    checked={!!m.add_to_library}
-                                    onChange={e => updateMapping(i, 'add_to_library', e.target.checked)}
-                                  />
-                                  <span>加入库</span>
-                                </label>
-                              )}
-                            </td>
-                            <td className="col-act">
-                              <button className="btn btn-sm btn-danger" onClick={() => removeMapping(i)}>删除</button>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-
-                {unmapped.length > 0 && (
-                  <div className="unmapped-box">
-                    <h3>⚠️ 未匹配的原始列</h3>
-                    <p className="unmapped-hint">💡 直接点击下方未匹配列，可快速为该列添加一条映射</p>
-                    <div className="unmapped-list">
-                      {unmapped.map((h, ui) => (
-                        <button key={`u-${ui}`} type="button" className="tag tag-clickable"
-                          onClick={() => addMappingForSource(h)}
-                          title={`点击为「${esc(h)}」添加映射`}>
-                          {esc(h)} ＋
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <div className="action-bar">
-                  <button className="btn btn-outline" onClick={addManualMapping}>➕ 手动添加映射</button>
-                  <button className="btn btn-primary btn-lg" onClick={handleConvert}>🚀 开始转换</button>
-                </div>
-                {convertStatus && <div className={`convert-status ${convertStatus.type}`}>{convertStatus.text}</div>}
-              </CollapsibleSection>
-            )}
-
-            {/* ======== 对比预览 ======== */}
-            {comparison && !comparison.error && (
-              <CollapsibleSection
-                title="🔍 表格内容预览"
-                defaultOpen={false}
+                actions={
+                  <button className="btn btn-sm btn-outline" onClick={handleReset}>🔄 转换新文件</button>
+                }
                 summary={
-                  comparison && (() => {
-                    const d = compareTab === 'source'
-                      ? { h: comparison.sourceHeaders, r: comparison.sourceRowCount }
-                      : { h: comparison.outputHeaders, r: comparison.outputRowCount }
-                    return `${d.r} 行 · ${d.h.length} 列`
-                  })()
+                  !sourceReady && !referenceReady
+                    ? '尚未上传文件'
+                    : `${sourceFiles.length} 个源文件 · ${totalRows} 行` +
+                    (referenceReady ? ` · 参考: ${referenceMeta.filename}` : '')
                 }
               >
-                <div className="compare-tabs">
-                  <button className={`compare-tab ${compareTab === 'source' ? 'active' : ''}`}
-                    onClick={() => setCompareTab('source')}>📄 原始表格</button>
-                  <button className={`compare-tab ${compareTab === 'output' ? 'active' : ''}`}
-                    onClick={() => setCompareTab('output')}>✅ 转换结果</button>
-                </div>
-                {(() => {
-                  const d = compareTab === 'source'
-                    ? { h: comparison.sourceHeaders, r: comparison.sourcePreview, t: comparison.sourceRowCount }
-                    : { h: comparison.outputHeaders, r: comparison.outputPreview, t: comparison.outputRowCount }
-                  return (
-                    <>
-                      <div className="compare-info">共 {d.t} 行 · {d.h.length} 列（预览前 {d.r.length} 行）</div>
-                      <div className="spreadsheet-container">
-                        <div className="spreadsheet-wrapper">
-                          <table className="spreadsheet">
-                            <thead>
-                              <tr><th>#</th>{d.h.map((h, i) => <th key={i} title={h}>{esc(h || '(空)')}</th>)}</tr>
-                            </thead>
-                            <tbody>
-                              {d.r.map((row, i) => (
-                                <tr key={i}>
-                                  <td>{i + 1}</td>
-                                  {d.h.map((h, j) => {
-                                    const v = row[h] || ''
-                                    const isNum = v !== '' && !isNaN(parseFloat(v)) && isFinite(v) && !/^=/.test(v) && !/^https?:/.test(v)
-                                    return <td key={j} className={isNum ? 'num' : ''} title={esc(v)}>{esc(v.length > 80 ? v.substring(0, 80) + '...' : v)}</td>
-                                  })}
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                        <div className="spreadsheet-scroll-hint">← 左右滑动查看更多列 →</div>
+                <div className="upload-grid">
+                  {/* 原始表格 */}
+                  <div className="upload-box">
+                    {!sourceReady ? (
+                      <div className="upload-zone"
+                        onClick={() => sourceInputRef.current?.click()}
+                        onDragOver={e => e.preventDefault()}
+                        onDrop={e => { e.preventDefault(); handleSourceUpload(e.dataTransfer.files) }}>
+                        <div className="upload-icon">📄</div>
+                        <p className="upload-title">原始表格（客户发来的）</p>
+                        <p className="upload-hint">拖拽文件到此处，或点击选择（可多选）</p>
+                        <p className="upload-formats">支持 .xlsx / .xls · 可一次选择多个文件</p>
+                        <input ref={sourceInputRef} type="file" accept=".xlsx,.xls" multiple hidden
+                          onChange={e => handleSourceUpload(e.target.files)} />
                       </div>
-                    </>
-                  )
-                })()}
+                    ) : (
+                      <div className="upload-info">
+                        <div className="source-file-list">
+                          <div className="source-file-summary">
+                            {sourceFiles.length} 个文件 · 共 {totalRows} 行
+                          </div>
+                          {sourceFiles.map((f, i) => (
+                            <div key={f.filename || i} className="source-file-item">
+                              <span className="sf-name">📄 {esc(f.filename || f.name)}</span>
+                              <span className="sf-meta">{f.rows} 行 · {(f.headers || []).length} 列</span>
+                              <button className="btn-icon" title="删除该文件"
+                                onClick={() => handleDeleteSource(f.filename)}>✕</button>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="source-actions">
+                          <button className="btn btn-sm btn-outline" onClick={() => sourceInputRef.current?.click()}>
+                            ➕ 添加文件
+                          </button>
+                          <input ref={sourceInputRef} type="file" accept=".xlsx,.xls" multiple hidden
+                            onChange={e => handleSourceUpload(e.target.files)} />
+                          <button className="btn-icon" onClick={handleClearSource}>✕ 清空</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 参考模板 */}
+                  <div className="upload-box">
+                    {!referenceReady ? (
+                      <div className="upload-zone"
+                        onClick={() => refInputRef.current?.click()}
+                        onDragOver={e => e.preventDefault()}
+                        onDrop={e => { e.preventDefault(); handleRefUpload(e.dataTransfer.files[0]) }}>
+                        <div className="upload-icon">📋</div>
+                        <p className="upload-title">参考模板（公司内部格式）</p>
+                        <p className="upload-hint">拖拽文件到此处，或点击选择</p>
+                        <p className="upload-formats">支持 .xlsx / .xls</p>
+                        <input ref={refInputRef} type="file" accept=".xlsx,.xls" hidden
+                          onChange={e => handleRefUpload(e.target.files[0])} />
+                      </div>
+                    ) : (
+                      <div className="upload-info" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span className="file-icon">📋</span>
+                        <span className="file-name">{referenceMeta.filename}</span>
+                        <span className="file-meta">{referenceMeta.headers.length} 列 · {referenceMeta.formulaCount} 公式列</span>
+                        <button className="btn-icon" onClick={handleClearRef}>✕</button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {sourceReady && referenceReady && step === 1 && (
+                  <div style={{ textAlign: 'center', marginTop: 16 }}>
+                    <button className="btn btn-primary" onClick={() => { setStep(2); setMatchCollapsed(false); setMatchStatus(null) }}>下一步 → 匹配</button>
+                  </div>
+                )}
               </CollapsibleSection>
-            )}
-          </main>
+
+              {/* ======== 步骤2: AI 匹配 ======== */}
+              {step >= 2 && (
+                <CollapsibleSection
+                  title="🤖 AI 智能列匹配"
+                  collapsed={matchCollapsed}
+                  summary={mappings.length > 0 ? `已匹配 ${mappings.length} 列` : '未开始匹配'}
+                >
+                  <div className="match-controls">
+                    <label className="toggle">
+                      <input type="checkbox" checked={useAI}
+                        onChange={e => {
+                          const on = e.target.checked
+                          setUseAI(on); setStep(2); setMappings([])
+                          // 开启 AI 但未配置 Key → 强制打开 API 设置
+                          if (on && !aiConfig.hasKey) {
+                            setMatchStatus({ type: 'error', text: '使用 AI 匹配前请先配置 DeepSeek API Key' })
+                            openAIConfig(true)
+                          }
+                        }} />
+                      <span className="toggle-slider" />
+                      <span className="toggle-label">使用 DeepSeek AI 匹配</span>
+                    </label>
+                    <button className="btn btn-primary" onClick={handleMatch}>🔍 开始匹配</button>
+                  </div>
+                  {matchStatus && <div className={`match-status ${matchStatus.type}`}>{matchStatus.text}</div>}
+                </CollapsibleSection>
+              )}
+
+              {/* ======== 步骤3: 预览调整 ======== */}
+              {step >= 3 && (
+                <CollapsibleSection
+                  title="📝 映射预览与调整"
+                  summary={`${mappings.length} 条映射` + (unmapped.length ? ` · ${unmapped.length} 列未匹配` : '')}
+                >
+                  <p className="section-hint">
+                    确认或调整列名映射关系，然后点击转换。
+                    未修改的 AI 匹配结果会自动存入映射匹配库；调整/手动添加的映射需勾选「加入库」才会存入。
+                  </p>
+
+                  <div className="mapping-table-wrap">
+                    <table className="mapping-table">
+                      <thead>
+                        <tr>
+                          <th className="col-idx">#</th>
+                          <th className="col-conf">匹配度</th>
+                          <th className="col-src">原始表格列名</th>
+                          <th className="col-arrow" />
+                          <th className="col-tgt">参考表格列名</th>
+                          <th className="col-formula">公式处理</th>
+                          <th className="col-lib">加入库</th>
+                          <th className="col-act">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {mappings.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} style={{ textAlign: 'center', padding: 28 }}>
+                              <div className="empty-mini">
+                                <div className="empty-mini-icon" aria-hidden="true">🔍</div>
+                                <p className="empty-mini-title">还没有匹配结果</p>
+                                <p className="empty-mini-hint">点击上方「开始匹配」自动识别列名，或使用「手动添加映射」逐列建立对应关系。</p>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : (
+                          <AnimatePresence initial={false}>
+                            {mappings.map((m, i) => {
+                              const used = mappings.filter((_, idx) => idx !== i).map(mm => mm.source)
+                              const formulaOpts = formulaOptions(m)
+                              return (
+                                <motion.tr
+                                  key={m.uid}
+                                  className={(m.source_is_formula || m.target_is_formula) ? 'row-formula' : ''}
+                                  initial={{ opacity: 0 }}
+                                  animate={{ opacity: 1 }}
+                                  exit={{ opacity: 0 }}
+                                  transition={{ duration: 0.32, ease: 'easeOut', delay: Math.min(i * 0.045, 0.55) }}
+                                >
+                              <td className="col-idx">{i + 1}</td>
+                              <td className="col-conf">
+                                <span className={`conf-badge conf-${m.confidence}`} title={m.reason}>
+                                  {CONF_LABELS[m.confidence] || m.confidence}
+                                </span>
+                              </td>
+                              <td className="col-src">
+                                <div className="col-name-wrap">
+                                  <select className="source-select" value={m.source} onChange={e => {
+                                    updateMapping(i, 'source', e.target.value)
+                                  }}>
+                                    {sourceHeaders.map((h, si) => {
+                                      const cleanH = (h || '').replace(/\n/g, '').trim()
+                                      const cleanSrc = (m.source || '').replace(/\n/g, '').trim()
+                                      const isF = isFormulaCol(h, sourceFormulaCols)
+                                      return (
+                                        <option key={`src-${si}`} value={h}
+                                          disabled={cleanH !== cleanSrc && used.includes(h)}>
+                                          {isF ? 'ƒ ' : ''}{esc(h || '(空)')}
+                                        </option>
+                                      )
+                                    })}
+                                  </select>
+                                  {isFormulaCol(m.source, sourceFormulaCols) && (
+                                    <span className="formula-tag" title="该列是原始表格中的公式列">ƒ 公式</span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="col-arrow">→</td>
+                              <td className="col-tgt">
+                                <div className="col-name-wrap">
+                                  <select className="target-select" value={m.target}
+                                    onChange={e => updateMapping(i, 'target', e.target.value)}>
+                                    <option value="">-- 不映射 --</option>
+                                    {targetOptions.map((h, ti) => (
+                                      <option key={`tgt-${ti}`} value={h}>
+                                        {isFormulaCol(h, targetFormulaCols) ? 'ƒ ' : ''}{esc(h || '(空)')}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {isFormulaCol(m.target, targetFormulaCols) && (
+                                    <span className="formula-tag" title="该列是参考表格中的公式列">ƒ 公式</span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="col-formula">
+                                {formulaOpts ? (
+                                  <select
+                                    className="formula-select"
+                                    value={m.formula_action || 'default'}
+                                    onChange={e => updateMapping(i, 'formula_action', e.target.value)}
+                                    title={formulaOpts.hint}
+                                  >
+                                    {formulaOpts.options.map(o => (
+                                      <option key={o.value} value={o.value}>{o.label}</option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <span className="formula-none">—</span>
+                                )}
+                              </td>
+                              <td className="col-lib">
+                                {m.add_to_library && isMappingInLibrary(m, libraryPairs) ? (
+                                  <span className="lib-existing"
+                                    title="该映射的源列名与目标列名均已存在于映射匹配库中">✅ 已在库中</span>
+                                ) : (
+                                  <label className="lib-checkbox"
+                                    title={m.add_to_library ? '勾选：转换后加入映射匹配库' : '未勾选：转换后不加入映射匹配库'}>
+                                    <input
+                                      type="checkbox"
+                                      checked={!!m.add_to_library}
+                                      onChange={e => updateMapping(i, 'add_to_library', e.target.checked)}
+                                    />
+                                    <span>加入库</span>
+                                  </label>
+                                )}
+                              </td>
+                              <td className="col-act">
+                                <button className="btn btn-sm btn-danger" onClick={() => removeMapping(i)}>删除</button>
+                              </td>
+                            </motion.tr>
+                          )
+                        })}
+                          </AnimatePresence>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {unmapped.length > 0 && (
+                    <div className="unmapped-box">
+                      <h3>⚠️ 未匹配的原始列</h3>
+                      <p className="unmapped-hint">💡 直接点击下方未匹配列，可快速为该列添加一条映射</p>
+                      <motion.div
+                        className="unmapped-list"
+                        initial="hidden"
+                        animate="show"
+                        variants={{ hidden: {}, show: { transition: { staggerChildren: 0.045, delayChildren: 0.06 } } }}
+                      >
+                        {unmapped.map((h, ui) => (
+                          <motion.button
+                            key={`u-${ui}`}
+                            type="button"
+                            className="tag tag-clickable"
+                            onClick={() => addMappingForSource(h)}
+                            title={`点击为「${esc(h)}」添加映射`}
+                            variants={{
+                              hidden: { opacity: 0, y: 12, scale: 0.9 },
+                              show: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.34, ease: [0.16, 1, 0.3, 1] } },
+                            }}
+                            whileHover={{ scale: 1.06, y: -1 }}
+                            whileTap={{ scale: 0.95 }}
+                          >
+                            {esc(h)} ＋
+                          </motion.button>
+                        ))}
+                      </motion.div>
+                    </div>
+                  )}
+
+                  <div className="action-bar">
+                    <button className="btn btn-outline" onClick={addManualMapping}>➕ 手动添加映射</button>
+                    <button className="btn btn-primary btn-lg" onClick={handleConvert}>🚀 开始转换</button>
+                  </div>
+                  {convertStatus && <div className={`convert-status ${convertStatus.type}`}>{convertStatus.text}</div>}
+                </CollapsibleSection>
+              )}
+
+              {/* ======== 对比预览 ======== */}
+              {comparison && !comparison.error && (
+                <CollapsibleSection
+                  title="🔍 表格内容预览"
+                  defaultOpen={false}
+                  summary={
+                    comparison && (() => {
+                      const d = compareTab === 'source'
+                        ? { h: comparison.sourceHeaders, r: comparison.sourceRowCount }
+                        : { h: comparison.outputHeaders, r: comparison.outputRowCount }
+                      return `${d.r} 行 · ${d.h.length} 列`
+                    })()
+                  }
+                >
+                  <div className="compare-tabs">
+                    <button className={`compare-tab ${compareTab === 'source' ? 'active' : ''}`}
+                      onClick={() => setCompareTab('source')}>📄 原始表格</button>
+                    <button className={`compare-tab ${compareTab === 'output' ? 'active' : ''}`}
+                      onClick={() => setCompareTab('output')}>✅ 转换结果</button>
+                  </div>
+                  {(() => {
+                    const d = compareTab === 'source'
+                      ? { h: comparison.sourceHeaders, r: comparison.sourcePreview, t: comparison.sourceRowCount }
+                      : { h: comparison.outputHeaders, r: comparison.outputPreview, t: comparison.outputRowCount }
+                    return (
+                      <>
+                        <div className="compare-info">共 {d.t} 行 · {d.h.length} 列（预览前 {d.r.length} 行）</div>
+                        <div className="spreadsheet-container">
+                          <div className="spreadsheet-wrapper">
+                            <table className="spreadsheet">
+                              <thead>
+                                <tr><th>#</th>{d.h.map((h, i) => <th key={i} title={h}>{esc(h || '(空)')}</th>)}</tr>
+                              </thead>
+                              <tbody>
+                                {d.r.map((row, i) => (
+                                  <tr key={i}>
+                                    <td>{i + 1}</td>
+                                    {d.h.map((h, j) => {
+                                      const v = row[h] || ''
+                                      const isNum = v !== '' && !isNaN(parseFloat(v)) && isFinite(v) && !/^=/.test(v) && !/^https?:/.test(v)
+                                      return <td key={j} className={isNum ? 'num' : ''} title={esc(v)}>{esc(v.length > 80 ? v.substring(0, 80) + '...' : v)}</td>
+                                    })}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <div className="spreadsheet-scroll-hint">← 左右滑动查看更多列 →</div>
+                        </div>
+                      </>
+                    )
+                  })()}
+                </CollapsibleSection>
+              )}
+            </main>
           )}
         </motion.div>
       </AnimatePresence>
 
       {/* 加载遮罩：portal 到 body，避免被 .app 的 filter 捕获导致 fixed 定位失效（跑到长页面居中） */}
       {loading && createPortal(
-        <div className="overlay">
-          <div className="spinner" />
+        <div className="overlay" role="status" aria-live="polite">
+          <div className="spinner" aria-hidden="true" />
+          <div className="overlay-progress" aria-hidden="true" />
           <p>{loadingText}</p>
         </div>,
         document.body

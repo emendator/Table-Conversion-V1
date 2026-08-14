@@ -13,6 +13,45 @@
  *   onClose():    关闭弹窗
  */
 import { createPortal } from 'react-dom'
+import { motion } from 'framer-motion'
+
+const EASE = [0.16, 1, 0.3, 1]
+
+/** 成功对勾：圆环描边 + 对勾描边 依次绘制 */
+function SuccessCheck() {
+    return (
+        <div className="done-icon" aria-hidden="true">
+            <svg viewBox="0 0 64 64" fill="none">
+                <defs>
+                    <linearGradient id="done-ring-g" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+                        <stop stopColor="#34D399" />
+                        <stop offset="1" stopColor="#10B981" />
+                    </linearGradient>
+                </defs>
+                <motion.circle
+                    cx="32" cy="32" r="26"
+                    stroke="url(#done-ring-g)"
+                    strokeWidth="4.5"
+                    strokeLinecap="round"
+                    initial={{ pathLength: 0, rotate: -90 }}
+                    animate={{ pathLength: 1 }}
+                    transition={{ duration: 0.65, ease: EASE }}
+                    style={{ transformOrigin: '50% 50%' }}
+                />
+                <motion.path
+                    d="M20 33 L28.5 41.5 L45 24"
+                    stroke="#fff"
+                    strokeWidth="5.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    initial={{ pathLength: 0 }}
+                    animate={{ pathLength: 1 }}
+                    transition={{ delay: 0.5, duration: 0.38, ease: EASE }}
+                />
+            </svg>
+        </div>
+    )
+}
 
 export default function ConvertCompleteModal({ open, outputName, downloading, onDownload, onReset, onClose }) {
     if (!open) return null
@@ -24,7 +63,7 @@ export default function ConvertCompleteModal({ open, outputName, downloading, on
                     <button className="done-modal-close" onClick={onClose} aria-label="关闭">✕</button>
                 </div>
                 <div className="done-modal-body">
-                    <div className="done-modal-icon">🎉</div>
+                    <SuccessCheck />
                     <p>表格转换成功！请下载转换结果文件：</p>
                     <div className="done-modal-file">
                         <span className="file-icon">📁</span>

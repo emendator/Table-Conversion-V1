@@ -353,7 +353,14 @@ export default function MappingLibrary({ onGoBack }) {
                         </thead>
                         <tbody>
                             {loading ? (
-                                <tr><td colSpan={9} style={{ textAlign: 'center', color: '#94A3B8', padding: 24 }}>加载中...</td></tr>
+                                <tr>
+                                    <td colSpan={9} className="skeleton-cell">
+                                        {Array.from({ length: 4 }).map((_, k) => (
+                                            <div key={k} className="skeleton-line"
+                                                style={{ animationDelay: `${k * 0.12}s` }} />
+                                        ))}
+                                    </td>
+                                </tr>
                             ) : filtered.length === 0 ? (
                                 <tr>
                                     <td colSpan={9} style={{ padding: 0 }}>
@@ -364,8 +371,8 @@ export default function MappingLibrary({ onGoBack }) {
                                             </p>
                                             <p className="empty-hint">
                                                 {search
-                                                    ? '换个关键词试试，或清空搜索框。'
-                                                    : '在上方「新增映射记录」中填写源列名与目标列名，或让 AI 匹配结果一键入库。'}
+                                                    ? `换个关键词试试 —— 当前共 ${records.length} 条记录。`
+                                                    : '在上方「新增映射记录」中填写源列名与目标列名，或让 AI 匹配结果一键入库；也支持从 Excel / CSV 快速导入。'}
                                             </p>
                                         </div>
                                     </td>

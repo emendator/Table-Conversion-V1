@@ -65,6 +65,10 @@ http://***REMOVED***:8080
 - ⏰ **账户有效期管理**——邀请码可设置注册账户的**有效期截止日期**（留空 = 永久）；账户到期后禁止登录，并在登录时**醒目提醒使用者**联系管理员续期
 - 🏢 **公司数据隔离**——映射库按「公司名 + 公司数据库密码」隔离，不同公司数据互不可见，杜绝冒用
 - 🔒 **数据加密存储**——账户、密码、API Key 等敏感数据加密后存于 `data/users/`，磁盘上不落明文
+- ✨ **登录页极光流体背景**——Canvas 交互式「极光 + 太空」：极光幕帘、丁达尔光线、视差星云、鼠标暖黄流光、流星雨（扰动星座）、点击涟漪、星点连线可交互打乱并自发重组均匀化
+- 🧲 **磁性吸附交互**——所有按钮/图标在光标靠近时被轻微吸附、移开弹回（同一时间只吸最近的一个）
+- 🫧 **全局高级动效**——数字滚动、滚动进度指示器、点击涟漪、按钮流光扫过、动态渐变背景、列表错峰 + FLIP 过渡、光标追光、3D 悬浮卡片、骨架屏波浪、SVG 成功对勾动画、毛玻璃模糊揭示入场、果冻回弹按钮（全部尊重 `prefers-reduced-motion`，触屏自动降级）
+- 🎨 **detail.design 式编辑感设计**——暖纸色表面 + 编辑式排版（数据等宽字体）+ 精致小标签、行 hover 强调条、按压深度感按钮（主色 `#5686FE`）
 
 ---
 
@@ -542,15 +546,18 @@ python backend/main.py 表/参考.xlsx 表/客户表格.xlsx -o data/输出/结�
 │   ├── src/
 │   │   ├── App.jsx           # 主应用组件（登录守卫 + 3 步骤流程 + 头部导航）
 │   │   ├── AuthPage.jsx      # 登录 / 注册 / 游客登录页（新注册公司 / 登录已有公司 / 过期账户醒目提醒）
+│   │   ├── FluidBackground.jsx      # 登录页极光流体背景画布（极光幕帘 / 丁达尔光线 / 视差星云 / 星座 / 流星 / 流光拖尾）
 │   │   ├── AdminPanel.jsx    # 用户管理页（邀请码 / 账号 / 公司数据库密码）
 │   │   ├── MappingLibrary.jsx        # 映射匹配库管理页面（多选/导入导出）
 │   │   ├── DuplicateConfirmModal.jsx # 重复数据处理确认弹窗
-│   │   ├── ConvertCompleteModal.jsx  # 转换完成弹窗
+│   │   ├── ConvertCompleteModal.jsx  # 转换完成弹窗（SVG 对勾描边动画）
 │   │   ├── AIConfigModal.jsx         # DeepSeek API 设置弹窗
 │   │   ├── CollapsibleSection.jsx    # 可折叠模块组件
-│   │   ├── App.css           # 完整样式表
+│   │   ├── magnetic.js      # 磁性吸附全局模块（光标靠近被吸附、移开弹回）
+│   │   ├── effects/         # 高级动效模块（CountUp 数字滚动 / CursorGlow 光标追光 / ScrollProgress 滚动进度 / ripple 点击涟漪 / tilt 3D 悬浮）
+│   │   ├── App.css           # 完整样式表（含 Editorial Craft 编辑感设计层）
 │   │   ├── api.js            # API 调用模块（token + session 管理）
-│   │   └── main.jsx          # React 入口
+│   │   └── main.jsx          # React 入口（初始化磁性吸附 / 涟漪 / 3D 悬浮）
 │   ├── index.html            # 页面模板
 │   ├── vite.config.js        # Vite 配置（端口 3002 + /api 代理）
 │   └── package.json          # Node.js 依赖
@@ -606,6 +613,9 @@ python backend/main.py 表/参考.xlsx 表/客户表格.xlsx -o data/输出/结�
 | `data/输出/` | 📂 转换结果输出到这里（每 5 分钟自动清理过期文件） |
 | `frontend/src/App.jsx` | 🖥️ React 主组件（登录守卫 + 3 步流程：上传 → 匹配 → 调整 → 下载） |
 | `frontend/src/AuthPage.jsx` | 🖥️ 登录 / 注册页（新注册公司 / 登录已有公司） |
+| `frontend/src/FluidBackground.jsx` | 🖥️ 登录页极光流体背景画布（极光幕帘 / 丁达尔光线 / 视差星云 / 星座 / 流星 / 流光拖尾） |
+| `frontend/src/magnetic.js` | 🖥️ 磁性吸附全局模块（所有可交互元素光标吸附） |
+| `frontend/src/effects/` | 🖥️ 高级动效模块（CountUp / CursorGlow / ScrollProgress / ripple / tilt） |
 | `frontend/src/AdminPanel.jsx` | 🖥️ 用户管理页（邀请码 / 账号 / 公司数据库密码） |
 | `frontend/src/MappingLibrary.jsx` | 🖥️ 映射匹配库管理页面（增删改查 / 导入导出） |
 | `frontend/src/DuplicateConfirmModal.jsx` | 🖥️ 重复数据处理确认弹窗（覆盖 / 跳过 / 取消） |
