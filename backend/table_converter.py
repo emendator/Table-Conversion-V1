@@ -33,6 +33,89 @@ from config import (
 )
 
 
+# ============================================================
+# Strict Open XML（*.xlsx 严格模式）兼容
+# Excel 另存为时可选「Strict Open XML 电子表格」，
+# 其命名空间为 http://purl.oclc.org/ooxml/...，
+# pandas/openpyxl 无法直接解析（读不到工作表）。
+# 这里在上传/读取前自动把命名空间重写为普通 xlsx（Transitional）。
+# ============================================================
+_STRICT_TO_TRANSITIONAL = [
+    ('http://purl.oclc.org/ooxml/spreadsheetml/main',
+     'http://schemas.openxmlformats.org/spreadsheetml/2006/main'),
+    ('http://purl.oclc.org/ooxml/officeDocument/relationships',
+     'http://schemas.openxmlformats.org/officeDocument/2006/relationships'),
+    ('http://purl.oclc.org/ooxml/drawingml/main',
+     'http://schemas.openxmlformats.org/drawingml/2006/main'),
+    ('http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing',
+     'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'),
+    ('http://purl.oclc.org/ooxml/package/relationships',
+     'http://schemas.openxmlformats.org/package/2006/relationships'),
+    ('http://purl.oclc.org/ooxml/package/content-types',
+     'http://schemas.openxmlformats.org/package/2006/content-types'),
+    ('http://purl.oclc.org/ooxml/officeDocument/docPropsVTypes',
+     'http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes'),
+    ('http://purl.oclc.org/ooxml/officeDocument/extended-properties',
+     'http://schemas.openxmlformats.org/officeDocument/2006/extended-properties'),
+    ('http://purl.oclc.org/ooxml/officeDocument/custom-properties',
+     'http://schemas.openxmlformats.org/officeDocument/2006/custom-properties'),
+]
+
+
+def _is_strict_ooxml(file_path: str) -> bool:
+    """快速检测：zip 包内是否使用 Strict OOXML 命名空间。"""
+    try:
+        with zipfile.ZipFile(file_path, 'r') as z:
+            for probe_name in ('xl/workbook.xml', '[Content_Types].xml',
+                               'xl/_rels/workbook.xml.rels'):
+                if probe_name in z.namelist():
+                    probe = z.read(probe_name)
+                    if probe and b'purl.oclc.org/ooxml' in probe:
+                        return True
+                    break
+    except Exception:
+        pass
+    return False
+
+
+def normalize_strict_ooxml(file_path: str) -> str:
+    """把 Strict OOXML 的命名空间重写为 Transitional（普通 .xlsx），就地覆盖。
+
+    流式处理 zip：逐个 entry 读取改写，二进制（图片等）原样复制，
+    内存峰值 ≈ 单个 entry 大小，适合 1.6G 内存服务器。
+    """
+    tmp_path = file_path + '.strict.tmp'
+    try:
+        with zipfile.ZipFile(file_path, 'r') as zin,              zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zout:
+            for info in zin.infolist():
+                data = zin.read(info.filename)
+                text = None
+                try:
+                    text = data.decode('utf-8')
+                except Exception:
+                    pass
+                if text is not None and 'purl.oclc.org' in text:
+                    for strict_ns, transitional_ns in _STRICT_TO_TRANSITIONAL:
+                        text = text.replace(strict_ns, transitional_ns)
+                    data = text.encode('utf-8')
+                zout.writestr(info, data)
+        os.replace(tmp_path, file_path)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+        raise
+    return file_path
+
+
+def normalize_strict_ooxml_if_needed(file_path: str) -> str:
+    """检测到 Strict OOXML 时自动转换为普通 xlsx；否则原样返回。"""
+    if file_path.lower().endswith('.xlsx') and _is_strict_ooxml(file_path):
+        normalize_strict_ooxml(file_path)
+    return file_path
+
+
 def get_formula_headers(template: dict) -> list:
     """从参考模板中提取公式列的列名列表"""
     if not template or 'formula_info' not in template:
@@ -128,6 +211,7 @@ def detect_source_formulas(file_path: str, header_row: int = 0) -> dict:
         {col_letter: formula_string}  源表公式列：列字母 → 公式
     """
     try:
+        normalize_strict_ooxml_if_needed(file_path)
         wb = openpyxl.load_workbook(file_path, data_only=False)
         ws = wb.active
         header_row_idx = header_row + 1  # 0-based → 1-based
@@ -154,6 +238,8 @@ def read_reference_template(file_path: str):
             'styles': style info
         }
     """
+    # Strict OOXML（purl.oclc.org 命名空间）自动转普通 xlsx
+    normalize_strict_ooxml_if_needed(file_path)
     # 使用 openpyxl 读取以保留公式
     wb = openpyxl.load_workbook(file_path)
     ws = wb.active
@@ -231,6 +317,8 @@ def read_source_file(file_path: str):
         tuple: (DataFrame, headers_list, header_row)
                header_row: 检测到的表头行号（0-based），供 extract_images_from_source 使用
     """
+    # Strict OOXML（purl.oclc.org 命名空间）自动转普通 xlsx
+    normalize_strict_ooxml_if_needed(file_path)
     # 先尝试读取，不指定header
     df_raw = pd.read_excel(file_path, header=None, dtype=object)
     
@@ -550,12 +638,12 @@ def _extract_xls_biff8_images(source_path: str) -> list:
     return images
 
 
-def _extract_images_from_biff8(source_path: str, header_row: int = None) -> dict:
-    """BIFF8（.xls）图片提取入口：返回 {(df_row_idx, col_idx): image_bytes}
+def _extract_images_from_biff8_order(source_path: str, header_row: int = None) -> dict:
+    """兜底策略：.xls 图片按「存储顺序 = 数据行顺序」推断位置。
 
-    图片位置说明：WPS 的 .xls 单元格内图片在二进制 OfficeArt 中未暴露行列，
-    只能按「图片存储顺序 = 数据行顺序」推断；图片列优先按表头名称识别，
-    无法识别时用 0 列兜底（由调用方 find_source_image_columns 二次推断）。
+    当源文件没有提供任何图片锚点信息（WPS 浮动图片、未知格式）时使用；
+    图片列优先按表头名称识别，无法识别时用 0 列兜底
+    （由调用方 find_source_image_columns 二次推断）。
     """
     images = _extract_xls_biff8_images(source_path)
     if not images:
@@ -598,20 +686,437 @@ def _extract_images_from_biff8(source_path: str, header_row: int = None) -> dict
     return result
 
 
-def extract_images_from_source(source_path: str, header_row: int = None) -> dict:
+# ============================================================
+# .xls 精确图片位置提取（纯 Python）：
+#   1. WPS 单元格内图片：ETCellImageData 内嵌 zip + DISPIMG 公式
+#   2. MSODRAWING OfficeArt 锚点：ClientAnchor + pib（标准 Excel .xls）
+# ============================================================
+def _read_ole_stream(source_path: str, name_lower: str):
+    """读取 OLE2 复合文档中的指定流（名称小写匹配），失败返回 None。"""
+    if not _HAS_OLEFILE:
+        return None
+    try:
+        ole = _olefile.OleFileIO(source_path)
+        try:
+            for entry in ole.listdir():
+                if entry and entry[-1].lower() == name_lower:
+                    return ole.openstream(entry).read()
+            return None
+        finally:
+            ole.close()
+    except Exception:
+        return None
+
+
+def _detect_header_row_from_rows(nrows: int, row_values_fn) -> int:
+    """从原始行数据检测表头行（与 read_source_file 一致：≥2 个非空值）。"""
+    for i in range(min(5, nrows)):
+        try:
+            row_vals = row_values_fn(i)
+        except Exception:
+            continue
+        non_null = sum(1 for v in row_vals
+                       if v is not None and str(v).strip() != '')
+        if non_null >= 2:
+            return i
+    return 0
+
+
+def _scan_dispimg_positions(source_path: str, header_row: int = None) -> list:
+    """用 xlrd 轻量扫描第一个工作表中所有 DISPIMG 公式单元格。
+
+    返回 [(df_row_idx, col_idx, guid)]：
+    - df_row_idx 对齐 read_source_file 的 DataFrame 行索引（跳过全空行）
+    - 相比 pd.read_excel 构造 DataFrame，内存占用小得多（1.6G 服务器友好）
+    """
+    try:
+        import xlrd
+    except ImportError:
+        return []
+    try:
+        book = xlrd.open_workbook(source_path)
+        sh = book.sheet_by_index(0)
+    except Exception:
+        return []
+    if header_row is None:
+        header_row = _detect_header_row_from_rows(
+            sh.nrows,
+            lambda r: [sh.cell_value(r, c) for c in range(sh.ncols)],
+        )
+    result = []
+    df_row = 0
+    for r in range(header_row + 1, sh.nrows):
+        row_vals = [sh.cell_value(r, c) for c in range(sh.ncols)]
+        is_empty = all(
+            (not isinstance(v, str)) or v.strip() == '' for v in row_vals
+        )
+        found = False
+        for c, v in enumerate(row_vals):
+            text = v if isinstance(v, str) else ''
+            if 'DISPIMG' not in text:
+                # 公式单元格兜底：取公式文本
+                try:
+                    if sh.cell_type(r, c) == xlrd.XL_CELL_FORMULA:
+                        f = sh.cell_formula(r, c)
+                        if f and 'DISPIMG' in f:
+                            text = f
+                except Exception:
+                    pass
+            if 'DISPIMG' in text:
+                m = re.search(r'ID_([A-F0-9]+)', text)
+                if m:
+                    result.append((df_row, c, 'ID_' + m.group(1)))
+                    found = True
+        if not is_empty or found:
+            df_row += 1
+    return result
+
+
+def _extract_wps_etc_images(source_path: str, header_row: int = None) -> dict:
+    """WPS .xls 单元格内图片：ETCellImageData 内嵌 zip（cellImages.xml）+ DISPIMG 公式。
+
+    WPS 在 .xls 的 OLE 流 ETCellImageData 中内嵌了一个标准 OOXML zip：
+    - xl/cellImages.xml 记录每张图的 GUID 与 r:embed 引用
+    - 工作表单元格中的 =DISPIMG("ID_...",1) 公式给出精确位置
+    按 GUID 一一对应，返回 {(df_row_idx, col_idx): image_bytes}。
+    """
+    data = _read_ole_stream(source_path, 'etcellimagedata')
+    if not data or data[:2] != b'PK':
+        return {}
+    try:
+        z = zipfile.ZipFile(io.BytesIO(data))
+        all_names = set(z.namelist())
+    except Exception:
+        return {}
+    ci_xml_name = next(
+        (n for n in all_names
+         if n.lower().endswith('cellimages.xml') and '/_rels/' not in n),
+        None,
+    )
+    ci_rels_name = next(
+        (n for n in all_names if n.lower().endswith('cellimages.xml.rels')),
+        None,
+    )
+    if not ci_xml_name or not ci_rels_name:
+        return {}
+    try:
+        ci_xml = z.read(ci_xml_name).decode('utf-8', errors='replace')
+        rels_xml = z.read(ci_rels_name).decode('utf-8', errors='replace')
+    except Exception:
+        return {}
+    # rId → 媒体文件（兼容 ../media/ 等相对写法）
+    rid_to_file = {}
+    for m in re.finditer(r'Id="(rId\d+)"[^>]*Target="([^"]+)"', rels_xml):
+        tgt = m.group(2).replace('\\', '/')
+        if tgt.startswith('../'):
+            tgt = 'xl/' + tgt[3:]
+        elif tgt.startswith('/'):
+            tgt = tgt.lstrip('/')
+        elif not tgt.startswith('xl/'):
+            tgt = 'xl/' + tgt
+        rid_to_file[m.group(1)] = tgt
+    # cellImages.xml：GUID → rId
+    guid_to_rid = {}
+    for blk in re.finditer(r'<xdr:pic\b.*?</xdr:pic>', ci_xml, re.DOTALL):
+        block = blk.group(0)
+        nm = re.search(r'name="(ID_[^"]+)"', block)
+        emb = re.search(r'r:embed="(rId\d+)"', block)
+        if nm and emb:
+            guid_to_rid[nm.group(1)] = emb.group(1)
+    if not guid_to_rid:
+        return {}
+    images_map = {}
+    for row_idx, col_idx, guid in _scan_dispimg_positions(source_path, header_row):
+        rid = guid_to_rid.get(guid, '')
+        media = rid_to_file.get(rid, '')
+        if not media or media not in all_names:
+            continue
+        try:
+            img_data = z.read(media)
+            if len(img_data) > 50:
+                images_map[(row_idx, col_idx)] = img_data
+        except Exception:
+            continue
+    return images_map
+
+
+# ---- OfficeArt（MSODRAWING）锚点解析：标准 Excel .xls 的精确图片位置 ----
+_MSODRAW_REC_TYPES = (0x00EC, 0x00EB, 0x00FC)  # 0x00EB/0x00FC 为 WPS 载体记录
+
+
+def _collect_msodraw_blobs(workbook_stream: bytes) -> list:
+    """按顺序收集 MSODRAWING 载体记录及其 CONTINUE（0x003C）续接数据。"""
+    blobs = []
+    i = 0
+    n = len(workbook_stream)
+    try:
+        while i + 4 <= n:
+            rt, rl = _struct.unpack('<HH', workbook_stream[i:i+4])
+            if rt in _MSODRAW_REC_TYPES:
+                blob = bytearray(workbook_stream[i+4:i+4+rl])
+                j = i + 4 + rl
+                while j + 4 <= n:
+                    rt2, rl2 = _struct.unpack('<HH', workbook_stream[j:j+4])
+                    if rt2 == 0x003C:
+                        blob += workbook_stream[j+4:j+4+rl2]
+                        j += 4 + rl2
+                    else:
+                        break
+                blobs.append(bytes(blob))
+                i = j
+            else:
+                i += 4 + rl
+    except Exception:
+        pass
+    return blobs
+
+
+def _iter_oart_records(data: bytes):
+    """迭代 OfficeArt 记录，产出 (recVer, recInstance, recType, payload)。"""
+    i = 0
+    n = len(data)
+    while i + 8 <= n:
+        h = _struct.unpack('<HHI', data[i:i+8])
+        rlen = h[2]
+        if i + 8 + rlen > n:
+            break
+        yield (h[0] & 0xF, h[0] >> 4, h[1], data[i+8:i+8+rlen])
+        i += 8 + rlen
+
+
+def _find_oart_records(data: bytes, target_type: int, out: list = None) -> list:
+    """递归查找指定 recType 的 OfficeArt 记录（容器内嵌套查找）。"""
+    if out is None:
+        out = []
+    for ver, _inst, rtype, payload in _iter_oart_records(data):
+        if rtype == target_type:
+            out.append(payload)
+        if ver == 0xF:  # 容器：递归
+            _find_oart_records(payload, target_type, out)
+    return out
+
+
+def _oart_blip_bytes(blip_payload: bytes):
+    """从 OfficeArt Blip 负载中按魔数提取图片字节（跳过 UID/tag 前缀）。"""
+    magics = (
+        (b'\x89PNG\r\n\x1a\n', 'png'),
+        (b'\xff\xd8\xff', 'jpg'),
+        (b'GIF8', 'gif'),
+        (b'BM', 'bmp'),
+    )
+    best = None
+    limit = min(len(blip_payload), 24)
+    for start in range(limit):
+        for magic, kind in magics:
+            if blip_payload[start:start+len(magic)] == magic:
+                best = (start, kind)
+                break
+        if best:
+            break
+    if best is None:
+        return None
+    start, kind = best
+    if kind == 'png':
+        iend = blip_payload.find(b'IEND', start + 8)
+        if iend >= 0:
+            return blip_payload[start:iend+8]
+    if kind == 'jpg':
+        p = start + 2
+        while p < len(blip_payload) - 1:
+            if blip_payload[p] == 0xFF and blip_payload[p+1] == 0xD9:
+                return blip_payload[start:p+2]
+            p += 1
+    if kind == 'gif':
+        trail = blip_payload.find(b';', start + 13)
+        if trail >= 0:
+            return blip_payload[start:trail+1]
+    if kind == 'bmp':
+        if start + 6 <= len(blip_payload):
+            sz = _struct.unpack('<I', blip_payload[start+2:start+6])[0]
+            if 50 < sz <= 50 * 1024 * 1024 and start + sz <= len(blip_payload):
+                return blip_payload[start:start+sz]
+    return blip_payload[start:].rstrip(b'\x00')
+
+
+def _parse_oart_bstore(container_payload: bytes) -> list:
+    """解析 OfficeArtBStoreContainer，返回按 BSE 顺序的图片字节列表。"""
+    blips = []
+    for _ver, _inst, rtype, bse in _iter_oart_records(container_payload):
+        if rtype != 0xF007:  # OfficeArtBSE
+            continue
+        if len(bse) < 44:
+            blips.append(None)
+            continue
+        try:
+            _h = _struct.unpack('<HHI', bse[36:44])
+            blip_len = _h[2]
+            blips.append(_oart_blip_bytes(bse[44:44+blip_len]))
+        except Exception:
+            blips.append(None)
+    return blips
+
+
+def _walk_oart_shapes(container_payload: bytes, out: list = None) -> list:
+    """递归遍历 SpgrContainer，收集每个 SpContainer 的 (ClientAnchor8元组, pib)。
+
+    pib（FOPT 属性 0x0165）为 BStore 中 1-based 的图片索引；
+    ClientAnchor（0xF00D）给出图片所在单元格 (row1, col1)，0-based。
+    """
+    if out is None:
+        out = []
+    for ver, inst, rtype, payload in _iter_oart_records(container_payload):
+        if rtype == 0xF003:  # OfficeArtSpgrContainer
+            _walk_oart_shapes(payload, out)
+        elif rtype == 0xF004:  # OfficeArtSpContainer
+            anchor = None
+            pib = None
+            for _v, _i, _t, sp in _iter_oart_records(payload):
+                if _t == 0xF00D and len(sp) >= 17:  # OfficeArtClientAnchor
+                    anchor = _struct.unpack('<8H', sp[1:17])
+                elif _t == 0xF00B:  # OfficeArtFOPT
+                    p = 0
+                    for _ in range(_i):
+                        if p + 6 > len(sp):
+                            break
+                        opid, op = _struct.unpack('<HI', sp[p:p+6])
+                        if (opid & 0x3FFF) == 0x0165:  # pib
+                            pib = op
+                        p += 6
+            if anchor is not None and pib and pib > 0:
+                out.append((anchor, pib))
+    return out
+
+
+def _extract_msodraw_anchored_images(source_path: str, header_row: int = None) -> dict:
+    """从 .xls 的 MSODRAWING（OfficeArt）中按 ClientAnchor + pib 提取精确位置图片。
+
+    返回 {(df_row_idx, col_idx): image_bytes}；
+    当文件中没有携带锚点的图片形状时返回 {}（调用方走顺序兜底）。
+    """
+    wb_stream = _read_ole_stream(source_path, 'workbook')
+    if not wb_stream:
+        wb_stream = _read_ole_stream(source_path, 'book')
+    if not wb_stream:
+        return {}
+    blobs = _collect_msodraw_blobs(wb_stream)
+    blips = []
+    shapes = []
+    for blob in blobs:
+        for ver, inst, rtype, payload in _iter_oart_records(blob):
+            if rtype == 0xF000:  # OfficeArtDggContainer
+                for bstore in _find_oart_records(payload, 0xF001):
+                    if not blips:
+                        blips = _parse_oart_bstore(bstore)
+                for dg in _find_oart_records(payload, 0xF002):
+                    shapes += _walk_oart_shapes(dg)
+            elif rtype == 0xF002:  # OfficeArtDgContainer（顶层，标准 Excel 分 sheet）
+                shapes += _walk_oart_shapes(payload)
+            elif rtype == 0xF004:  # OfficeArtSpContainer（WPS 每个形状一条载体记录）
+                shapes += _walk_oart_shapes(blob)
+                break
+    if not shapes or not blips:
+        return {}
+    if header_row is None:
+        header_row = 0
+        try:
+            df_raw = pd.read_excel(source_path, header=None, dtype=object)
+            header_row = _detect_header_row_from_rows(
+                len(df_raw), lambda r: df_raw.iloc[r].tolist(),
+            )
+        except Exception:
+            pass
+    raw_to_df = _build_raw_to_df_map(source_path, header_row)
+    images_map = {}
+    for (r1, c1, _dx1, _dy1, _r2, _c2, _dx2, _dy2), pib in shapes:
+        if not (0 < pib <= len(blips)):
+            continue
+        img = blips[pib - 1]
+        if not img:
+            continue
+        df_row = raw_to_df.get(r1)
+        if df_row is None:
+            if r1 > header_row:
+                df_row = r1 - header_row - 1
+            else:
+                continue
+        if df_row < 0:
+            continue
+        images_map[(df_row, c1)] = img
+    return images_map
+
+
+def _extract_images_from_biff8(source_path: str, header_row: int = None,
+                               diag: dict = None) -> dict:
+    """BIFF8（.xls）图片提取入口：返回 {(df_row_idx, col_idx): image_bytes}
+
+    三路策略（纯 Python，内存友好）：
+    1. WPS 单元格内图片（ETCellImageData 内嵌 zip + DISPIMG 公式）→ 精确位置
+    2. MSODRAWING OfficeArt 锚点（ClientAnchor + pib）→ 精确位置（标准 Excel .xls）
+    3. 兜底：按「图片存储顺序 = 数据行顺序」推断（无锚点信息时）
+
+    diag 不为 None 时写入诊断信息（mode: exact/fallback/none、数量），
+    供后端接口生成前端提醒。
+    """
+    if diag is None:
+        diag = {}
+    result = {}
+    exact_sources = []
+    # 1) WPS 单元格内图片（DISPIMG 公式 → 精确行列）
+    try:
+        wps_map = _extract_wps_etc_images(source_path, header_row)
+    except Exception:
+        wps_map = {}
+    if wps_map:
+        result.update(wps_map)
+        exact_sources.append('WPS单元格图片')
+    # 2) MSODRAWING OfficeArt 锚点
+    try:
+        art_map = _extract_msodraw_anchored_images(source_path, header_row)
+    except Exception:
+        art_map = {}
+    if art_map:
+        for k, v in art_map.items():
+            result.setdefault(k, v)
+        exact_sources.append('OfficeArt锚点')
+    if result:
+        diag['mode'] = 'exact'
+        diag['count'] = len(result)
+        diag['exact_count'] = len(result)
+        diag['detail'] = '、'.join(exact_sources) or '精确位置'
+        return result
+    # 3) 顺序兜底（保留原有行为，避免回归）
+    fallback = _extract_images_from_biff8_order(source_path, header_row)
+    diag['count'] = len(fallback)
+    if fallback:
+        diag['mode'] = 'fallback'
+        diag['exact_count'] = 0
+        diag['detail'] = '顺序推断（源文件未提供图片锚点）'
+    else:
+        diag['mode'] = 'none'
+        diag['exact_count'] = 0
+        diag['detail'] = '未发现图片'
+    return fallback
+
+
+def extract_images_from_source(source_path: str, header_row: int = None,
+                               diag: dict = None) -> dict:
     """
     从源文件中提取嵌入的图片
     
-    支持三种图片存储方式：
+    支持多种图片存储方式：
     1. cellImages 格式（DISPIMG公式）：解析 cellImages.xml 获取位置
     2. drawings 格式（浮动图片）：使用 lxml 解析 xl/drawings/drawing*.xml 获取锚点位置
-    3. .xls (BIFF8/OLE2 二进制，含 WPS 生成)：从 Workbook 流的 MSODRAWING 记录
-       提取图片（位置按存储顺序推断）
-    
+    3. .xls (BIFF8/OLE2 二进制，含 WPS 生成)：
+       - WPS 单元格内图片：ETCellImageData 内嵌 zip + DISPIMG 公式 → 精确位置
+       - MSODRAWING OfficeArt 锚点（ClientAnchor + pib）→ 精确位置
+       - 无锚点时按存储顺序推断（兜底）
+
     Args:
         source_path: 源文件路径
         header_row: 外部传入的表头行号（0-based），如果为None则自动检测。
-    
+        diag: 可选 dict，提取后写入图片定位诊断信息
+              （mode: exact/fallback/none、count、detail），供前端提醒。
+
     Returns:
         dict: {(df_row_idx, col_idx): image_data_bytes}
               df_row_idx: 0-based，对齐 read_source_file 返回的 DataFrame 行索引
@@ -624,7 +1129,7 @@ def extract_images_from_source(source_path: str, header_row: int = None) -> dict
         with open(source_path, 'rb') as _f:
             _head = _f.read(8)
         if _head[:8] == bytes.fromhex('d0cf11e0a1b11ae1'):
-            return _extract_images_from_biff8(source_path, header_row)
+            return _extract_images_from_biff8(source_path, header_row, diag)
     except Exception:
         pass
 
@@ -957,6 +1462,11 @@ def extract_images_from_source(source_path: str, header_row: int = None) -> dict
     
     except Exception:
         pass
-    
+
+    if diag is not None:
+        diag['mode'] = 'exact' if images_map else 'none'
+        diag['count'] = len(images_map)
+        diag['exact_count'] = len(images_map)
+        diag['detail'] = 'xlsx 单元格/浮动图片锚点' if images_map else '未发现图片'
     return images_map
 

@@ -118,6 +118,8 @@ function App() {
   const [compareTab, setCompareTab] = useState('output')
   // 转换完成弹窗
   const [convertDoneOpen, setConvertDoneOpen] = useState(false)
+  // .xls 图片位置错位提醒（后端 imageWarning）
+  const [convertImageWarning, setConvertImageWarning] = useState(null)
   const [downloading, setDownloading] = useState(false)
   // 转换前重复确认弹窗: null 或 {duplicates, resolve}
   const [dupConfirm, setDupConfirm] = useState(null)
@@ -418,6 +420,7 @@ function App() {
         setComparison(result.comparison)
         setStep(3)
         setConvertDoneOpen(true)
+        setConvertImageWarning(result.imageWarning || null)
       } else setConvertStatus({ type: 'error', text: '❌ ' + result.error })
     } catch (e) { setConvertStatus({ type: 'error', text: '❌ 网络请求失败：' + e.message + '，请检查网络连接后重试' }) }
     finally { setLoading(false) }
@@ -466,6 +469,7 @@ function App() {
     setSourceFormulaCols([]); setTargetFormulaCols([])
     setOutputName(''); setComparison(null); setMatchStatus(null); setConvertStatus(null)
     setConvertDoneOpen(false)
+    setConvertImageWarning(null)
     setMatchCollapsed(false)
   }, [])
 
@@ -480,7 +484,7 @@ function App() {
     setTargetOptions([]); setSourceHeaders([])
     setSourceFormulaCols([]); setTargetFormulaCols([])
     setOutputName(''); setComparison(null); setMatchStatus(null); setConvertStatus(null)
-    setConvertDoneOpen(false); setMatchCollapsed(false)
+    setConvertDoneOpen(false); setConvertImageWarning(null); setMatchCollapsed(false)
     setLibraryPairs(new Set())
     setAIConfig({ hasKey: false, maskedKey: '', totalTokens: 0, nonce: '' })
   }, [])
@@ -640,6 +644,7 @@ function App() {
                         <p className="upload-title">原始表格（客户发来的）</p>
                         <p className="upload-hint">拖拽文件到此处，或点击选择（可多选）</p>
                         <p className="upload-formats">支持 .xlsx / .xls · 可一次选择多个文件</p>
+                        <p className="upload-format-tip">⚠️ 首行必须是无合并单元格的表头，否则列匹配可能不准</p>
                         <input ref={sourceInputRef} type="file" accept=".xlsx,.xls" multiple hidden
                           onChange={e => handleSourceUpload(e.target.files)} />
                       </div>
@@ -657,6 +662,12 @@ function App() {
                                 onClick={() => handleDeleteSource(f.filename)}>✕</button>
                             </div>
                           ))}
+                          {sourceFiles.some(f => /.xls$/i.test(f.filename || f.name || '')) && (
+                            <div className="xls-image-warning" role="alert">
+                              <strong>⚠️ .xls 图片位置提醒</strong>
+                              <p>检测到 <strong>.xls 旧格式文件</strong>：其中的图片在转换后可能无法一一对应到正确位置（会按顺序逐行放置）。建议先在 WPS / Excel 中「另存为 .xlsx」再上传，图片位置即可精确还原。</p>
+                            </div>
+                          )}
                         </div>
                         <div className="source-actions">
                           <button className="btn btn-sm btn-outline" onClick={() => sourceInputRef.current?.click()}>
@@ -681,6 +692,7 @@ function App() {
                         <p className="upload-title">参考模板（公司内部格式）</p>
                         <p className="upload-hint">拖拽文件到此处，或点击选择</p>
                         <p className="upload-formats">支持 .xlsx / .xls</p>
+                        <p className="upload-format-tip">⚠️ 首行必须是无合并单元格的表头，否则列匹配可能不准</p>
                         <input ref={refInputRef} type="file" accept=".xlsx,.xls" hidden
                           onChange={e => handleRefUpload(e.target.files[0])} />
                       </div>
@@ -780,89 +792,89 @@ function App() {
                                   exit={{ opacity: 0 }}
                                   transition={{ duration: 0.32, ease: 'easeOut', delay: Math.min(i * 0.045, 0.55) }}
                                 >
-                              <td className="col-idx">{i + 1}</td>
-                              <td className="col-conf">
-                                <span className={`conf-badge conf-${m.confidence}`} title={m.reason}>
-                                  {CONF_LABELS[m.confidence] || m.confidence}
-                                </span>
-                              </td>
-                              <td className="col-src">
-                                <div className="col-name-wrap">
-                                  <select className="source-select" value={m.source} onChange={e => {
-                                    updateMapping(i, 'source', e.target.value)
-                                  }}>
-                                    {sourceHeaders.map((h, si) => {
-                                      const cleanH = (h || '').replace(/\n/g, '').trim()
-                                      const cleanSrc = (m.source || '').replace(/\n/g, '').trim()
-                                      const isF = isFormulaCol(h, sourceFormulaCols)
-                                      return (
-                                        <option key={`src-${si}`} value={h}
-                                          disabled={cleanH !== cleanSrc && used.includes(h)}>
-                                          {isF ? 'ƒ ' : ''}{esc(h || '(空)')}
-                                        </option>
-                                      )
-                                    })}
-                                  </select>
-                                  {isFormulaCol(m.source, sourceFormulaCols) && (
-                                    <span className="formula-tag" title="该列是原始表格中的公式列">ƒ 公式</span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="col-arrow">→</td>
-                              <td className="col-tgt">
-                                <div className="col-name-wrap">
-                                  <select className="target-select" value={m.target}
-                                    onChange={e => updateMapping(i, 'target', e.target.value)}>
-                                    <option value="">-- 不映射 --</option>
-                                    {targetOptions.map((h, ti) => (
-                                      <option key={`tgt-${ti}`} value={h}>
-                                        {isFormulaCol(h, targetFormulaCols) ? 'ƒ ' : ''}{esc(h || '(空)')}
-                                      </option>
-                                    ))}
-                                  </select>
-                                  {isFormulaCol(m.target, targetFormulaCols) && (
-                                    <span className="formula-tag" title="该列是参考表格中的公式列">ƒ 公式</span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="col-formula">
-                                {formulaOpts ? (
-                                  <select
-                                    className="formula-select"
-                                    value={m.formula_action || 'default'}
-                                    onChange={e => updateMapping(i, 'formula_action', e.target.value)}
-                                    title={formulaOpts.hint}
-                                  >
-                                    {formulaOpts.options.map(o => (
-                                      <option key={o.value} value={o.value}>{o.label}</option>
-                                    ))}
-                                  </select>
-                                ) : (
-                                  <span className="formula-none">—</span>
-                                )}
-                              </td>
-                              <td className="col-lib">
-                                {m.add_to_library && isMappingInLibrary(m, libraryPairs) ? (
-                                  <span className="lib-existing"
-                                    title="该映射的源列名与目标列名均已存在于映射匹配库中">✅ 已在库中</span>
-                                ) : (
-                                  <label className="lib-checkbox"
-                                    title={m.add_to_library ? '勾选：转换后加入映射匹配库' : '未勾选：转换后不加入映射匹配库'}>
-                                    <input
-                                      type="checkbox"
-                                      checked={!!m.add_to_library}
-                                      onChange={e => updateMapping(i, 'add_to_library', e.target.checked)}
-                                    />
-                                    <span>加入库</span>
-                                  </label>
-                                )}
-                              </td>
-                              <td className="col-act">
-                                <button className="btn btn-sm btn-danger" onClick={() => removeMapping(i)}>删除</button>
-                              </td>
-                            </motion.tr>
-                          )
-                        })}
+                                  <td className="col-idx">{i + 1}</td>
+                                  <td className="col-conf">
+                                    <span className={`conf-badge conf-${m.confidence}`} title={m.reason}>
+                                      {CONF_LABELS[m.confidence] || m.confidence}
+                                    </span>
+                                  </td>
+                                  <td className="col-src">
+                                    <div className="col-name-wrap">
+                                      <select className="source-select" value={m.source} onChange={e => {
+                                        updateMapping(i, 'source', e.target.value)
+                                      }}>
+                                        {sourceHeaders.map((h, si) => {
+                                          const cleanH = (h || '').replace(/\n/g, '').trim()
+                                          const cleanSrc = (m.source || '').replace(/\n/g, '').trim()
+                                          const isF = isFormulaCol(h, sourceFormulaCols)
+                                          return (
+                                            <option key={`src-${si}`} value={h}
+                                              disabled={cleanH !== cleanSrc && used.includes(h)}>
+                                              {isF ? 'ƒ ' : ''}{esc(h || '(空)')}
+                                            </option>
+                                          )
+                                        })}
+                                      </select>
+                                      {isFormulaCol(m.source, sourceFormulaCols) && (
+                                        <span className="formula-tag" title="该列是原始表格中的公式列">ƒ 公式</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="col-arrow">→</td>
+                                  <td className="col-tgt">
+                                    <div className="col-name-wrap">
+                                      <select className="target-select" value={m.target}
+                                        onChange={e => updateMapping(i, 'target', e.target.value)}>
+                                        <option value="">-- 不映射 --</option>
+                                        {targetOptions.map((h, ti) => (
+                                          <option key={`tgt-${ti}`} value={h}>
+                                            {isFormulaCol(h, targetFormulaCols) ? 'ƒ ' : ''}{esc(h || '(空)')}
+                                          </option>
+                                        ))}
+                                      </select>
+                                      {isFormulaCol(m.target, targetFormulaCols) && (
+                                        <span className="formula-tag" title="该列是参考表格中的公式列">ƒ 公式</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="col-formula">
+                                    {formulaOpts ? (
+                                      <select
+                                        className="formula-select"
+                                        value={m.formula_action || 'default'}
+                                        onChange={e => updateMapping(i, 'formula_action', e.target.value)}
+                                        title={formulaOpts.hint}
+                                      >
+                                        {formulaOpts.options.map(o => (
+                                          <option key={o.value} value={o.value}>{o.label}</option>
+                                        ))}
+                                      </select>
+                                    ) : (
+                                      <span className="formula-none">—</span>
+                                    )}
+                                  </td>
+                                  <td className="col-lib">
+                                    {m.add_to_library && isMappingInLibrary(m, libraryPairs) ? (
+                                      <span className="lib-existing"
+                                        title="该映射的源列名与目标列名均已存在于映射匹配库中">✅ 已在库中</span>
+                                    ) : (
+                                      <label className="lib-checkbox"
+                                        title={m.add_to_library ? '勾选：转换后加入映射匹配库' : '未勾选：转换后不加入映射匹配库'}>
+                                        <input
+                                          type="checkbox"
+                                          checked={!!m.add_to_library}
+                                          onChange={e => updateMapping(i, 'add_to_library', e.target.checked)}
+                                        />
+                                        <span>加入库</span>
+                                      </label>
+                                    )}
+                                  </td>
+                                  <td className="col-act">
+                                    <button className="btn btn-sm btn-danger" onClick={() => removeMapping(i)}>删除</button>
+                                  </td>
+                                </motion.tr>
+                              )
+                            })}
                           </AnimatePresence>
                         )}
                       </tbody>
@@ -1007,6 +1019,7 @@ function App() {
         open={convertDoneOpen}
         outputName={outputName}
         downloading={downloading}
+        imageWarning={convertImageWarning}
         onDownload={handleDownload}
         onReset={handleReset}
         onClose={() => setConvertDoneOpen(false)}

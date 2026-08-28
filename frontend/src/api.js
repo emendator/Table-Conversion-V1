@@ -93,10 +93,20 @@ async function api(url, options = {}) {
     try {
         const data = JSON.parse(text);
         if (data.sessionId) localStorage.setItem(SESSION_KEY, data.sessionId);
+        if (!res.ok) {
+            // 后端错误统一归一化：FastAPI 抛错返回 {"detail": "..."}
+            let detail = (data && data.detail !== undefined)
+                ? data.detail
+                : (data && data.error) || ('服务器返回异常 (' + res.status + ')');
+            if (typeof detail !== 'string') detail = JSON.stringify(detail);
+            return { success: false, error: detail, ...data };
+        }
         return data;
     } catch {
+        // 非 2xx 且非 JSON：抛出可读错误，避免前端显示 undefined
+        if (!res.ok) throw new Error('服务器返回异常 (' + res.status + ')，请检查后端服务或网络');
         // 后端返回了 HTML（如 404/502 错误页或 index.html）而非 JSON
-        throw new Error(`服务器返回异常 (${res.status})，请确认后端服务已启动、接口地址正确`);
+        throw new Error('服务器返回异常 (' + res.status + ')，请确认后端服务已启动、接口地址正确');
     }
 }
 

@@ -508,6 +508,13 @@ body {
   margin-top: 8px;
 }
 
+.upload-format-tip {
+  font-size: 12px;
+  color: #B45309;
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
 .upload-info {
   display: flex;
   align-items: center;
@@ -3434,9 +3441,9 @@ button:active:not(:disabled),
   pointer-events: none;
   z-index: 2;
   background: radial-gradient(circle,
-    rgba(124, 58, 237, .10) 0%,
-    rgba(86, 134, 254, .06) 38%,
-    transparent 70%);
+      rgba(124, 58, 237, .10) 0%,
+      rgba(86, 134, 254, .06) 38%,
+      transparent 70%);
   mix-blend-mode: soft-light;
   will-change: transform;
 }
@@ -3447,9 +3454,9 @@ button:active:not(:disabled),
   border-radius: 50%;
   pointer-events: none;
   background: radial-gradient(circle,
-    rgba(255, 255, 255, .55) 0%,
-    rgba(147, 197, 253, .22) 40%,
-    transparent 70%);
+      rgba(255, 255, 255, .55) 0%,
+      rgba(147, 197, 253, .22) 40%,
+      transparent 70%);
   transform: scale(0);
   opacity: .5;
   animation: ripple-grow .62s ease-out forwards;
@@ -3469,9 +3476,9 @@ button:active:not(:disabled),
 .collapse-header .ripple,
 .step .ripple {
   background: radial-gradient(circle,
-    rgba(86, 134, 254, .26) 0%,
-    rgba(124, 58, 237, .12) 45%,
-    transparent 70%);
+      rgba(86, 134, 254, .26) 0%,
+      rgba(124, 58, 237, .12) 45%,
+      transparent 70%);
 }
 
 @keyframes ripple-grow {
@@ -3538,6 +3545,7 @@ button:active:not(:disabled),
 }
 
 @keyframes text-shimmer {
+
   0%,
   100% {
     background-position: 0% 50%;
@@ -3604,6 +3612,7 @@ button:active:not(:disabled),
 }
 
 @keyframes step-pulse {
+
   0%,
   100% {
     box-shadow: 0 0 0 4px rgba(86, 134, 254, .16);
@@ -3625,6 +3634,7 @@ button:active:not(:disabled),
 }
 
 @keyframes float-y {
+
   0%,
   100% {
     transform: translateY(0);
@@ -3648,10 +3658,10 @@ button:active:not(:disabled),
   border: none;
   border-radius: 50%;
   background: conic-gradient(from 0deg,
-    transparent 0 230deg,
-    #5686FE 300deg,
-    #A78BFA 345deg,
-    transparent 360deg);
+      transparent 0 230deg,
+      #5686FE 300deg,
+      #A78BFA 345deg,
+      transparent 360deg);
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
   mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
   animation: spin .9s cubic-bezier(.55, .15, .45, .85) infinite;
@@ -4318,4 +4328,55 @@ h3,
   background:
     radial-gradient(80% 70% at 50% 0%, rgba(86, 134, 254, .05), transparent 70%),
     linear-gradient(180deg, #FFFFFF 0%, #FAF8F4 100%);
+}
+
+/* ---- 19) .xls 图片位置提醒（位于源文件列表下方，独占一行） ---- */
+.xls-image-warning {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning);
+  color: #92400E;
+  font-size: 12.5px;
+  line-height: 1.6;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.xls-image-warning strong {
+  color: #B45309;
+}
+
+.xls-image-warning p {
+  margin: 4px 0 0;
+}
+
+.done-modal-warning {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning);
+  color: #92400E;
+  text-align: left;
+}
+
+.done-modal-warning strong {
+  display: block;
+  font-size: 14px;
+  margin-bottom: 6px;
+  color: #B45309;
+}
+
+.done-modal-warning p {
+  font-size: 12.5px !important;
+  line-height: 1.6;
+  margin: 0 0 6px !important;
+}
+
+.done-modal-warning .done-modal-warning-meta {
+  font-size: 12px !important;
+  color: #A16207 !important;
+  margin: 0 !important;
 }

@@ -8,6 +8,7 @@
  *   open:         是否显示
  *   outputName:   输出文件名（展示 + 下载）
  *   downloading:  下载中的 loading 状态
+ *   imageWarning: .xls 图片位置错位提醒（后端 imageWarning，可为 null）
  *   onDownload(): 下载结果文件
  *   onReset():    转换新文件（重置会话，回到上传步骤）
  *   onClose():    关闭弹窗
@@ -53,7 +54,7 @@ function SuccessCheck() {
     )
 }
 
-export default function ConvertCompleteModal({ open, outputName, downloading, onDownload, onReset, onClose }) {
+export default function ConvertCompleteModal({ open, outputName, downloading, imageWarning, onDownload, onReset, onClose }) {
     if (!open) return null
     return createPortal(
         <div className="done-modal-overlay" onClick={onClose}>
@@ -69,6 +70,15 @@ export default function ConvertCompleteModal({ open, outputName, downloading, on
                         <span className="file-icon">📁</span>
                         <span className="done-modal-name" title={outputName}>{outputName}</span>
                     </div>
+                    {imageWarning && (
+                        <div className="done-modal-warning" role="alert">
+                            <strong>⚠️ 图片位置可能错位</strong>
+                            <p>{imageWarning.message}</p>
+                            <p className="done-modal-warning-meta">
+                                涉及文件：{(imageWarning.files || []).join('、')} · {imageWarning.imageCount || 0} 张图片按顺序放置
+                            </p>
+                        </div>
+                    )}
                 </div>
                 <div className="done-modal-actions">
                     <button className="btn btn-success btn-lg" disabled={downloading} onClick={onDownload}>

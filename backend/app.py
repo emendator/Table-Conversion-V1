@@ -1082,6 +1082,7 @@ def api_convert(request: Request, body: ConvertRequest = ConvertRequest(), user:
     try:
         source_files = data["source_files"]
 
+        image_diag = {}
         if len(source_files) == 1:
             src = source_files[0]
             output_filename = f"{src['name']}_转换结果.xlsx"
@@ -1102,16 +1103,25 @@ def api_convert(request: Request, body: ConvertRequest = ConvertRequest(), user:
                 mappings=converted_mappings,
                 source_name=src["name"],
                 source_formula_info=src.get("source_formula_info", {}),
+                image_diag=image_diag,
             )
         else:
             output_filename = f"批量转换结果_{len(source_files)}个文件.xlsx"
             output_path = os.path.join(OUTPUT_DIR, output_filename)
+            image_diags = [{} for _ in source_files]
             result_path = _do_batch_convert(
                 source_files=source_files,
                 reference_path=data["reference_path"],
                 output_path=output_path,
                 user_mappings=user_mappings,
+                image_diags=image_diags,
             )
+            # 批量：任一文件图片只能按顺序推断 → 整体提示
+            if any(d.get('mode') == 'fallback' for d in image_diags):
+                image_diag = {
+                    'mode': 'fallback',
+                    'count': sum(d.get('count', 0) for d in image_diags),
+                }
 
         data["output_path"] = result_path
         data["output_name"] = os.path.basename(result_path)
@@ -1148,6 +1158,7 @@ def api_convert(request: Request, body: ConvertRequest = ConvertRequest(), user:
             "outputName": os.path.basename(result_path),
             "downloadUrl": "/api/download",
             "comparison": comparison,
+            "imageWarning": _build_image_warning(source_files, image_diag),
         }
     except HTTPException:
         raise
@@ -1402,8 +1413,33 @@ def _embed_images(ws, images_map, source_img_col, target_img_col, data_rows,
             continue
 
 
+def _build_image_warning(source_files: list, image_diag: dict):
+    """当 .xls 源文件的图片只能按存储顺序推断位置时，生成前端提醒；否则返回 None。
+
+    image_diag 由 extract_images_from_source 写入：
+      mode: exact（精确位置）/ fallback（顺序推断兜底）/ none（无图片）
+    """
+    if not image_diag or image_diag.get('mode') != 'fallback':
+        return None
+    if not image_diag.get('count'):
+        return None
+    xls_files = [s['name'] for s in source_files
+                 if str(s.get('name', '')).lower().endswith('.xls')]
+    if not xls_files:
+        return None
+    return {
+        "files": xls_files,
+        "imageCount": image_diag.get('count', 0),
+        "message": (
+            "检测到旧版 .xls 格式文件中的图片缺少单元格锚点信息，"
+            "转换结果里的图片只能按存储顺序逐行放置，可能与商品行错位。"
+            "建议在 WPS/Excel 中将源文件另存为 .xlsx 后重新上传，图片位置即可精确还原。"
+        ),
+    }
+
+
 def _do_convert(source_path, reference_path, output_path, mappings, source_name,
-                source_formula_info=None):
+                source_formula_info=None, image_diag=None):
     import pandas as pd
     import openpyxl
     from openpyxl.utils import get_column_letter
@@ -1641,7 +1677,9 @@ def _do_convert(source_path, reference_path, output_path, mappings, source_name,
                 formula = formula_info[col_letter]
                 cell.value = _adjust_ref_formula(formula, output_row)
 
-    images_map = extract_images_from_source(source_path, header_row=source_header_row)
+    images_map = extract_images_from_source(
+        source_path, header_row=source_header_row, diag=image_diag,
+    )
 
     # ---- 稳健识别源/目标图片列（不再只依赖表头含"图片"，优先从实际图片位置推断） ----
     source_img_col = None
@@ -1687,7 +1725,8 @@ def _do_convert(source_path, reference_path, output_path, mappings, source_name,
     return output_path
 
 
-def _do_batch_convert(source_files, reference_path, output_path, user_mappings=None):
+def _do_batch_convert(source_files, reference_path, output_path, user_mappings=None,
+                      image_diags=None):
     import pandas as pd
     import openpyxl
     from openpyxl.utils import get_column_letter
@@ -1803,7 +1842,11 @@ def _do_batch_convert(source_files, reference_path, output_path, user_mappings=N
             current_output_row += 1
 
         df_src, src_headers, src_hr = read_source_file(source_path)
-        images_map = extract_images_from_source(source_path, header_row=src_hr)
+        images_map = extract_images_from_source(
+            source_path,
+            header_row=src_hr,
+            diag=(image_diags[file_idx] if image_diags and file_idx < len(image_diags) else None),
+        )
 
         # 稳健识别本文件的源图片列（优先从实际图片位置推断）
         source_img_col = None
