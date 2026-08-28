@@ -201,10 +201,19 @@ function App() {
   // ========== 文件上传 ==========
   const handleSourceUpload = useCallback(async (files) => {
     if (!files || files.length === 0) return
+    // FileList 内按 名称+大小 去重，防止拖拽/系统传入重复项
+    const seen = new Set()
+    const uniqueFiles = Array.from(files).filter(f => {
+      const key = f.name + '|' + f.size
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    if (uniqueFiles.length === 0) return
     setLoading(true)
-    setLoadingText(`正在上传并解析 ${files.length} 个文件...`)
+    setLoadingText('正在上传并解析 ' + uniqueFiles.length + ' 个文件...')
     try {
-      const result = await api.uploadSource(Array.from(files))
+      const result = await api.uploadSource(uniqueFiles)
       if (result.success) {
         setSourceFiles(result.files || [])
         setSourceReady(true)
@@ -646,7 +655,7 @@ function App() {
                         <p className="upload-formats">支持 .xlsx / .xls · 可一次选择多个文件</p>
                         <p className="upload-format-tip">⚠️ 首行必须是无合并单元格的表头，否则列匹配可能不准</p>
                         <input ref={sourceInputRef} type="file" accept=".xlsx,.xls" multiple hidden
-                          onChange={e => handleSourceUpload(e.target.files)} />
+                          onChange={e => { handleSourceUpload(e.target.files); e.target.value = '' }} />
                       </div>
                     ) : (
                       <div className="upload-info">
@@ -674,7 +683,7 @@ function App() {
                             ➕ 添加文件
                           </button>
                           <input ref={sourceInputRef} type="file" accept=".xlsx,.xls" multiple hidden
-                            onChange={e => handleSourceUpload(e.target.files)} />
+                            onChange={e => { handleSourceUpload(e.target.files); e.target.value = '' }} />
                           <button className="btn-icon" onClick={handleClearSource}>✕ 清空</button>
                         </div>
                       </div>

@@ -554,6 +554,23 @@ def upload_source(request: Request, files: list[UploadFile] = File(...), user: d
                 "source_formula_info": source_formula_info,      # 源表公式列: 列字母→公式
                 "source_formula_columns": source_formula_columns,  # 源表公式列名
             }
+
+            # 同名文件去重：同一会话重复上传（拖拽/重复选择同一文件）
+            # 以最新一次为准——先移除旧记录与旧文件，避免列表里出现两个相同文件
+            existing_idx = next(
+                (i for i, f in enumerate(data["source_files"])
+                 if f["filename"] == file.filename),
+                None,
+            )
+            if existing_idx is not None:
+                old = data["source_files"].pop(existing_idx)
+                try:
+                    os.remove(old["path"])
+                except Exception:
+                    pass
+                if existing_idx < len(data["source_paths"]):
+                    data["source_paths"].pop(existing_idx)
+
             data["source_files"].append(file_info)
             data["source_paths"].append(filepath)
             uploaded.append(file_info)
