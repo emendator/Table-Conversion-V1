@@ -34,6 +34,7 @@ http://***REMOVED***:8080
   - [修改图片行高](#4-修改图片行高)
   - [映射历史记录管理](#5-映射历史记录管理)
   - [命令行批量转换](#6-命令行批量转换)
+- [架构说明与代码文件详解（后端与前端）](#架构说明与代码文件详解后端与前端)
 - [文件说明](#文件说明)
 
 ---
@@ -56,7 +57,10 @@ http://***REMOVED***:8080
 - 🔀 **重复列名编号**——源表/参考表出现同名列时按顺序编号区分（金额、金额(2)），输出文件仍保留原始列名
 - 📝 **公式列智能处理**——自动识别源表/参考表公式列，映射时可选"用数据/保留公式/用源公式"，输出不破坏公式
 - 📦 **一次上传多个表格**，自动合并成一个结果文件
-- 🖼️ 自动把客户表格里的产品图片搬到结果表格中，缩放居中（支持 `.xlsx` 与 **BIFF8 `.xls`（WPS）** 格式的图片提取）
+- 🖼️ **图片精确搬运**——把源表产品图片搬到结果表格对应行、缩放居中。**纯 Python 精确解析图片锚点**，兼容多种存储格式：`.xlsx` 的浮动锚点(drawings)、单元格内图片(cellImages/DISPIMG)、Office 365 richData，以及 **BIFF8 `.xls`（WPS）** 的单元格内图片(ETCellImageData+DISPIMG) 与 OfficeArt 锚点
+- 📄 **文件格式兼容广**——支持普通 `.xlsx`、Office365 另存的**严格格式（OOXML Strict）**、老式 **`.xls`（WPS/BIFF8）** 的读取与图片提取（纯 Python 处理，无需在服务器安装 Office/LibreOffice）
+- ⚠️ **图片错位提醒**——仅当 `.xls` 图片确实**没有锚点信息**无法精确定位时，会在上传时与转换完成弹窗**醒目提醒**建议「另存为 .xlsx」，绝不静默产出错位结果
+- 🔁 **上传自动去重**——同名/重复文件自动去重（同一文件重复选择/拖拽只保留最新一份，前端按「文件名+大小」过滤 + 后端移除旧记录），文件列表不会出现重复项
 - 🧹 **游客模式不保留任何数据**——游客退出登录后，账号、映射库、API Key、上传/输出文件等全部自动清除
 - ⚡ **高并发稳定**——耗时操作（文件解析/转换/AI 调用）在线程池中执行，不阻塞登录等其它功能
 - 📊 转换完成后可**在线预览**原始表格和结果表格的对比
@@ -109,7 +113,7 @@ http://***REMOVED***:8080
 
 - 管理员可在「用户管理」页生成邀请码（选择角色 + 账户有效期截止日期）
 - **有效期截止日期 = 用该邀请码注册的账户的到期时间**（留空 = 永久；账户到期后将被**禁止登录**，登录时会有醒目的过期提醒，可被管理员延长或清除）
-- 邀请码本身不过期，**无论是否使用都可随时删除**
+- 邀请码本身不过期，**无论是否使用都可随时删除**；**已使用（注册成功）的邀请码自动作废清理**，管理面板仅展示未使用的邀请码
 
 ### 账号管理
 
@@ -235,9 +239,15 @@ npm --version
 - 或者**点击**上传区域，在弹出的窗口中选择文件
 - 左侧原始表格可以**一次选择多个文件**（按住 Ctrl 多选），或后续点击「➕ 添加文件」追加
 
-上传成功后，会显示文件列表信息。
+上传成功后，会显示文件列表信息（各文件行数 / 列数，可单个删除或一键清空）。
 
+> ⚠️ **表头要求**：上传区常驻提示——**首行必须是无合并单元格的表头**，否则列匹配可能不准。
+>
+> ⚠️ **格式提醒**：若上传的是老式 **`.xls`** 文件，文件列表下方会出现黄条提醒——若其中图片缺少锚点信息无法精确定位，建议先「另存为 .xlsx」再上传。
+>
 > 💡 参考模板只需上传一次，所有原始表格都按这个模板转换。
+>
+> 💡 同名/重复文件会自动去重（以最新一次为准），不会出现两个相同文件。
 
 ### 第二步：智能列匹配
 
@@ -332,7 +342,20 @@ npm --version
 
 ### Q: 转换后图片位置不对 / 图片没转换出来？
 
-这通常是源文件中图片的锚点格式特殊。工具已支持两种主流图片格式（单元格嵌入和浮动锚点），并兼容 `.xlsx` 与 **BIFF8 `.xls`（WPS 生成）** 文件的图片提取。如仍有问题请在 Excel 中将源文件另存为 `.xlsx` 格式后重试。
+工具用**纯 Python 精确解析图片锚点**，支持多种存储格式：
+
+- `.xlsx`：浮动锚点图片(drawings)、单元格内图片(`DISPIMG`/cellImages)、Office 365 richData
+- `.xls`（WPS/BIFF8）：WPS 单元格内图片(ETCellImageData + `DISPIMG`)、OfficeArt 锚点解析
+
+绝大多数情况下图片都能精确归位到正确行。**仅当**源 `.xls` 图片完全没有任何锚点信息时，才会按存储顺序逐行放置——此时页面上会**醒目提醒**（上传后文件列表下方的黄条 + 转换完成弹窗提示），建议在 WPS/Excel 中将源文件**另存为 `.xlsx`** 后重新上传，即可精确还原。
+
+### Q: 上传了 Office365 保存的表格报错 / 读不出数据？
+
+新版 Excel/WPS「另存为」若选了「严格 Open XML 格式(.xlsx)」，普通解析会读不出工作表。工具已**自动兼容**：上传/读取时会自动检测并用**纯 Python 流式重写命名空间**（Strict → 普通格式）再解析，无需安装 Office。若仍有问题，请在 Excel 中用默认「Excel 工作簿」格式另存后再上传。
+
+### Q: 重复上传 / 同名文件会怎样？
+
+自动去重。同一文件重复选择或拖拽只保留**最新一份**：前端按「文件名 + 大小」去重，后端同时移除该会话的旧记录，文件列表不会出现两个相同文件；同一会话内也可以再次选择同一个文件来覆盖更新。
 
 ### Q: 点击上传没反应？
 
@@ -386,7 +409,7 @@ Vite 默认可能绑定到 IPv6，在 `vite.config.js` 中已配置 `host: '0.0.
 - 🔍 搜索、✏️ 编辑、🗑️ 删除单条记录
 - ✅ 多选 + 批量删除
 - 📤 **导出**为 Excel 表格（.xlsx）
-- 📥 **导入** Excel / CSV 表格（自动识别「源列名」「目标列名」列）
+- 📥 **导入** Excel / CSV 表格（自动识别「源列名」「目标列名」列），导入时可选择**覆盖现有库**或**合并**，遇到重复数据会弹窗确认（覆盖 / 跳过 / 取消）
 - 每条记录显示**来源**（AI自动 / 手动 / 导入）和使用次数
 
 ### Q: 表格里有同名列（如两个「金额」）怎么办？
@@ -521,53 +544,141 @@ python backend/main.py 表/参考.xlsx 表/客户表格.xlsx -o data/输出/结�
 
 ---
 
-## 架构说明（v3.0 React + FastAPI）
+## 架构说明与代码文件详解（后端与前端）
 
+> 📖 本节面向**完全不了解本项目的人**：先看「调用链」，再对照目录，目录里**每个代码文件单独一行，行尾注释就是它所实现的功能**。想改功能、查代码、排问题时，按文件名就能定位到对应模块。
+
+### 🧭 阅读代码的入口（一次网页操作背后经过哪些文件）
+
+```text
+① 网页入口    frontend/index.html → frontend/src/main.jsx（React 挂载）→ App.jsx（主界面）
+② 页面动作    页面按钮/上传 → frontend/src/api.js（统一发请求）→ 请求后端 /api/* → backend/app.py 对应路由
+③ 后端业务    app.py 调用 table_converter / deepseek_matcher / mapping_history / user_system / ai_config 完成业务
+④ 数据落盘    上传临时文件 data/uploads → 转换结果 data/输出；映射库 data/映射历史记录_{公司key}.json；账户加密数据 data/users/
 ```
-表格转换/
-├── backend/                  ← 🔧 后端 API 服务（FastAPI + uvicorn）
-│   ├── app.py                # FastAPI 主应用：/api/* 接口 + 转换核心逻辑 + 认证/游客路由 + 缓存定时清理
-│   ├── config.py             # 配置文件（模型、路径、图片行高、数据目录）
-│   ├── crypto.py             # 加密模块（密码哈希 / 敏感字段加密 / 文件级加密）
-│   ├── auth.py               # 登录会话 + 权限依赖（require_login / require_role）
-│   ├── user_system.py        # 用户 / 邀请码 / 公司数据库密码 / 每账户 API Key / 游客账号与无账号公司自动清理
-│   ├── ai_config.py          # 每账户 DeepSeek API Key 配置（加密存储 + token 统计）
-│   ├── table_converter.py    # 表格读取 / 重复列名编号 / 公式列识别 / 图片提取
-│   ├── deepseek_matcher.py   # 列名匹配引擎（AI + 本地 + 映射库三级）
-│   ├── mapping_history.py    # 映射历史记录管理（查重 / 覆盖 / 跳过 / 公司隔离）
-│   ├── main.py               # 命令行批量转换入口（复用 Web 转换逻辑）
-│   └── requirements.txt      # Python 依赖（fastapi / uvicorn 等）
-├── data/                     # 全部数据（自动生成，删除后自动重建）
-│   ├── users/                # 用户系统数据（加密文件：users / invite_codes / api_keys / companies）
-│   ├── 映射历史记录_{key}.json # 映射匹配库（按公司隔离键命名）
-│   ├── uploads/              # 上传临时文件（每 5 分钟自动清理）
-│   └── 输出/                 # 转换结果输出目录
-├── frontend/                 ← 🖥️ 独立前端（React 19 + Vite 8）
-│   ├── src/
-│   │   ├── App.jsx           # 主应用组件（登录守卫 + 3 步骤流程 + 头部导航）
-│   │   ├── AuthPage.jsx      # 登录 / 注册 / 游客登录页（新注册公司 / 登录已有公司 / 过期账户醒目提醒）
-│   │   ├── FluidBackground.jsx      # 登录页极光流体背景画布（极光幕帘 / 丁达尔光线 / 视差星云 / 星座 / 流星 / 流光拖尾）
-│   │   ├── AdminPanel.jsx    # 用户管理页（邀请码 / 账号 / 公司数据库密码）
-│   │   ├── MappingLibrary.jsx        # 映射匹配库管理页面（多选/导入导出）
-│   │   ├── DuplicateConfirmModal.jsx # 重复数据处理确认弹窗
-│   │   ├── ConvertCompleteModal.jsx  # 转换完成弹窗（SVG 对勾描边动画）
-│   │   ├── AIConfigModal.jsx         # DeepSeek API 设置弹窗
-│   │   ├── CollapsibleSection.jsx    # 可折叠模块组件
-│   │   ├── magnetic.js      # 磁性吸附全局模块（光标靠近被吸附、移开弹回）
-│   │   ├── effects/         # 高级动效模块（CountUp 数字滚动 / CursorGlow 光标追光 / ScrollProgress 滚动进度 / ripple 点击涟漪 / tilt 3D 悬浮）
-│   │   ├── App.css           # 完整样式表（含 Editorial Craft 编辑感设计层）
-│   │   ├── api.js            # API 调用模块（token + session 管理）
-│   │   └── main.jsx          # React 入口（初始化磁性吸附 / 涟漪 / 3D 悬浮）
-│   ├── index.html            # 页面模板
-│   ├── vite.config.js        # Vite 配置（端口 3002 + /api 代理）
-│   └── package.json          # Node.js 依赖
-├── deploy/                   # 📦 云服务器部署脚本（deploy.sh / nginx.conf / systemd 服务 / update.sh）
-├── docs/部署/                # 📄 云服务器部署指南文档
-├── 表/                       # 参考模板和原始表格存放目录
-├── 启动.bat                  # 一键启动入口（本机便携运行）
-├── launcher.ps1              # 便携启动核心（环境检测/依赖安装/服务启动）
-├── README.md                 # 本文件
-└── .gitignore                # Git 忽略规则
+
+### 🔧 后端代码 backend/（Python FastAPI + uvicorn，只提供 JSON REST API）
+
+```text
+backend/  ← 后端代码目录
+├── app.py                  ★ 后端唯一入口与路由层（uvicorn app:app 启动）
+│                           · 创建 FastAPI 实例 app + CORS + 生命周期（启动/停止清理线程）
+│                           · 全部 /api/* 路由：注册/登录/登出/游客与当前用户(auth)、邀请码(invite)、
+│                             账号管理(admin/users)、公司信息与公司数据库密码(company)、
+│                             源表/参考模板上传与清空/删除(upload/clear/delete)、列匹配(match)、
+│                             转换(convert)、结果下载(download)、重置会话(reset)、AI 配置(ai/config)、
+│                             映射库增删改查/查重/导出/导入(mapping-library)
+│                           · 会话缓存：X-Session-Id 匿名会话 + Bearer 登录令牌会话
+│                           · 转换核心 _do_convert / _do_batch_convert：以参考模板重建输出工作簿，
+│                             写入数据/公式、按锚点嵌入图片、多源文件批量合并
+│                           · 并发与稳定：上传/匹配/转换等耗时操作在线程池执行（多文件匹配并发上限 3），
+│                             后台线程每 5 分钟清理 data/uploads 与 data/输出 中超过 1 小时的临时文件
+├── config.py               # 全局配置：路径（backend/data/uploads/输出）、DeepSeek API 地址与模型名
+│                           #（deepseek-v4-flash）、图片行高/边距（IMAGE_ROW_HEIGHT_PT 等）、AI 提示词模板
+├── crypto.py               # 加解密工具：PBKDF2-HMAC-SHA256 加盐密码哈希；XOR 流式加密敏感字段；
+│                           # 加密 JSON 的原子读写（写临时文件 + os.replace，防并发写坏文件）
+├── auth.py                 # 登录会话模块：签发/吊销/校验 Bearer token（有效期 24 小时）、
+│                           # contextvars 保存请求级「当前用户/公司/隔离键」，供其他模块无参获取；
+│                           # FastAPI 权限依赖 require_login / require_admin / require_manager
+├── user_system.py          # 用户系统数据层：账户/邀请码/每账户 API Key/公司数据库密码的加密存取；
+│                           # · 三级角色（admin>manager>user）、账户有效期（到期禁登录）
+│                           # · 游客账号创建与退出清理、无账号公司的自动清理、内置 admin 初始化
+│                           # · 清除管理员时级联删除其用户、旧版 backend/users 数据自动迁移
+├── ai_config.py            # DeepSeek API 配置薄封装：按当前登录账户读写 API Key（掩码/指纹）并
+│                           # 记录/读取 token 消耗统计；非请求上下文（如 CLI）回退到内置 admin
+├── mapping_history.py      # 映射匹配库（映射历史）：按「公司隔离键」读写 data/映射历史记录_{key}.json；
+│                           # 记录增删改查/清空、多选批量删除、查重（仅按源列名）、
+│                           # 转换结果入库与统计、导入（覆盖/合并）导出、公司改密码时映射库迁移
+├── table_converter.py      # 表格读写核心：读取源表与参考模板、表头行检测、重复列名自动编号；
+│                           # · Strict OOXML（Office365 严格格式）自动转普通 xlsx 再解析
+│                           # · 公式列识别（列字母→公式）、列宽与样式模板提取
+│                           # · 图片提取：xlsx（cellImages/DISPIMG/drawings/richData）与 .xls BIFF8
+│                           #   （WPS ETCellImageData 精确锚点 / OfficeArt MSODRAWING 锚点 / 顺序兜底）
+├── deepseek_matcher.py     # 列名匹配引擎：三级匹配 = ①映射库记录 → ②列名完全相同的精确匹配 →
+│                           #   ③剩余列交给 DeepSeek AI（开/关）或本地模糊引擎；
+│                           # · AI 调用（关闭思考模式、动态 max_tokens）与返回 JSON 解析；失败自动降级本地
+│                           # · 本地引擎：字符相似度 + 9 大领域关键词词典 + 数据类型推断综合评分
+├── main.py                 # 命令行入口：python backend/main.py 参考模板 源文件... [--no-ai] [-o 输出]；
+│                           # 复用 app.py 的 _do_convert/_do_batch_convert，与网页端行为一致；
+│                           # 另有 --set-api-key 单独设置并加密保存 DeepSeek API Key
+└── requirements.txt        # Python 第三方依赖清单（fastapi、uvicorn、pandas、openpyxl、xlrd、requests 等）
+```
+
+### 🖥️ 前端代码 frontend/（React 19 + Vite 8）
+
+```text
+frontend/  ← 前端代码目录
+├── index.html              # 唯一 HTML 入口：<div id="root"> React 挂载点、页签标题/图标、SEO 描述
+├── vite.config.js          # Vite 配置：开发服务器端口 3002、host 0.0.0.0、/api 代理到 http://127.0.0.1:8004
+├── package.json            # 前端依赖与 npm 脚本（dev / build / lint / preview）
+├── .oxlintrc.json          # oxlint 代码检查配置（react hooks / export 规则）
+├── .gitignore              # 前端忽略规则（node_modules / dist 等）
+└── src/  ← React 源码
+    ├── main.jsx            # ★ React 程序入口：初始化全局特效（磁性吸附/点击涟漪/3D 悬浮），
+    │                       #   挂载 <CursorGlow/>（光标追光）与 <App/> 到 #root
+    ├── App.jsx             # ★ 主界面组件：登录守卫 + 顶部导航（转换工具/映射匹配库/用户管理/API 设置）
+    │                       #   主流程三步：①上传原始表格(可多文件、自动去重)+参考模板 →
+    │                       #   ②AI/本地匹配成映射表（手动改列/增删映射、公式列处理下拉）→
+    │                       #   ③执行转换 → 预览对比/下载/转换完成弹窗/重置；
+    │                       #   还负责 .xls 图片错位提醒、重复数据确认弹窗、AI 配置弹窗等状态管理
+    ├── api.js              # 后端 API 封装层：统一 fetch、维护 X-Session-Id 与登录 token（localStorage）、
+    │                       #   非 2xx 错误归一化（FastAPI detail→可读 error）、API Key 前端加密传输，
+    │                       #   提供登录注册/上传/匹配/转换/下载/AI 配置/映射库等全部接口函数
+    ├── App.css             # 全站样式表（约 4300 行）：页面布局/按钮/上传区/映射表/弹窗/提示条 +
+    │                       #   Editorial Craft 编辑感设计层与全部动效关键帧、响应式适配
+    ├── AuthPage.jsx        # 登录/注册/游客登录页面：公司「新建/加入已有」两种归属、邀请码与账户到期
+    │                       #   醒目提醒、3D 翻转卡片 + 逐字入场动效（背景用 FluidBackground）
+    ├── FluidBackground.jsx # 登录页 Canvas 极光流体背景组件：极光幕帘/丁达尔光线/视差星云/星座/流星/
+    │                       #   鼠标暖光拖尾/点击涟漪（尊重 prefers-reduced-motion）
+    ├── AdminPanel.jsx      # 用户管理页（最高级管理员/管理员可见）：邀请码生成/列表/延长/删除、
+    │                       #   账号列表与延长/清除（级联）、公司数据库密码查看与修改
+    ├── MappingLibrary.jsx  # 映射匹配库管理页：搜索/新增/编辑/删除单条、多选批量删除、
+    │                       #   导出 Excel、导入 Excel/CSV（解析→查重→覆盖或合并写入）
+    ├── DuplicateConfirmModal.jsx  # 重复数据处理弹窗：列出重复源列名，可勾选范围（全部/选中），
+    │                              #   返回 覆盖 overwrite / 跳过 skip / 取消 cancel
+    ├── ConvertCompleteModal.jsx   # 转换完成弹窗：SVG 圆环+对勾描边动画、下载按钮、转换新文件、
+    │                              #   .xls 图片可能错位的橙色提醒（imageWarning）
+    ├── AIConfigModal.jsx         # DeepSeek API 设置弹窗：输入 sk- 开头 Key、显示掩码与 token 消耗；
+    │                             #   未配置 Key 时 forced 强制模式不可关闭
+    ├── CollapsibleSection.jsx    # 通用可折叠卡片组件（展开/收起、收起摘要、标题栏操作按钮、外部收起控制）
+    ├── magnetic.js               # 全局「磁性吸附」特效模块：光标靠近按钮/图标被轻微吸附、移开弹回；
+    │                             #   事件委托 + rAF 节流，同一时刻只吸附最近的一个
+    └── effects/                  # 高级动效子模块（均尊重 prefers-reduced-motion，触屏自动降级）
+        ├── CountUp.jsx           #   数字滚动组件：数值变化时从旧值平滑滚动到新值（easeOutQuart）
+        ├── CursorGlow.jsx        #   光标追光组件：弹簧缓动柔光跟随鼠标，pointer-events:none 不挡交互
+        ├── ScrollProgress.jsx    #   页面顶部阅读进度指示条：随页面滚动填满（弹簧缓动）
+        ├── ripple.js             #   点击涟漪模块：pointerdown 事件委托，在点击处扩散波纹后自动移除
+        └── tilt.js               #   3D 悬浮卡片模块：仅对 [data-tilt] 元素做透视倾斜与抬升、移开回正
+```
+
+### 📦 启动 / 部署 / 数据 / 文档等支撑文件
+
+```text
+启动.bat                  # Windows 一键启动入口：检测 PowerShell 后调用 launcher.ps1（双击即可）
+launcher.ps1              # 便携启动核心：检测 Python/Node → 建/修 .venv → 安装 pip 与 npm 依赖 →
+                          # 启动后端 uvicorn(0.0.0.0:8004 --reload) 与前端 vite(3002) → 打开浏览器；退出时清理进程
+deploy/
+├── deploy.sh                  # Ubuntu 云服务器一键部署脚本：装系统依赖/Node/后端依赖、构建前端、
+│                              #   配置 systemd 服务与 Nginx、放行防火墙（默认 80，内地未备案可传 8080）
+├── nginx.conf                 # Nginx 站点配置：托管 frontend/dist 静态文件 + /api 反代到 127.0.0.1:8004；
+│                              #   上传大小上限 150m、静态资源长缓存、SPA 兜底
+├── table-converter.service    # systemd 服务单元：以 www-data 运行 uvicorn app:app，监听 127.0.0.1:8004，
+│                              #   固定单 worker（登录会话保存在进程内存中，不能多 worker）
+└── update.sh                  # 服务器更新脚本：修复目录权限 → npm 重新构建前端 → 重启后端服务
+docs/
+├── 部署/云服务器部署指南.md     # 完整部署/更新/备份/排障指南（含 Git 私有仓库认证流程）
+└── 用户系统/需求分析.md        # 用户系统需求分析文档（三级权限/邀请码/公司隔离的原始设计）
+data/                          # 运行时数据目录（已 gitignore，被删除后启动时自动重建）
+├── users/                     #   用户系统加密数据文件：users / invite_codes / api_keys / companies
+├── uploads/                   #   上传临时文件（每 5 分钟自动清理超过 1 小时的文件）
+├── 输出/                      #   转换结果输出目录（同样自动清理过期文件）
+├── .ai_secret                 #   本地加解密密钥文件（勿提交 Git、勿外传）
+├── ai_config.json、ai_usage.json      #   旧版全局 AI Key / token 数据（新版已按账户迁移到 data/users/）
+└── 映射历史记录_{key}.json     #   映射匹配库文件（{key} 为「公司名+公司数据库密码」派生的隔离键，按公司分开）
+表/                            # 示例/业务表格目录：表/原始表/（客户表）、表/参考表/（公司模板）
+工作日报/                      # 每日开发工作日报（day1 ~ day37，记录了功能演进与线上排障全过程）
+README.md                      # 本文件
+.gitignore                     # Git 忽略规则（data/、表/、工作日报/、node_modules、.venv 等不入库）
 ```
 
 **技术栈**：
@@ -604,18 +715,24 @@ python backend/main.py 表/参考.xlsx 表/客户表格.xlsx -o data/输出/结�
 | `backend/auth.py` | 登录会话 + 权限依赖（require_login / require_role） |
 | `backend/user_system.py` | 用户 / 邀请码 / 公司数据库密码 / 每账户 API Key 数据层 |
 | `backend/ai_config.py` | 每账户 DeepSeek API Key 配置（加密存储 + token 统计） |
-| `backend/table_converter.py` | 表格读取、重复列名编号、公式列识别、图片提取 |
+| `backend/table_converter.py` | 表格读取、重复列名编号、公式列识别、Strict OOXML 自动兼容、多格式图片锚点精确解析 |
 | `backend/deepseek_matcher.py` | 列名匹配引擎（映射库 + 精确 + AI/本地 三级匹配） |
 | `backend/mapping_history.py` | 映射历史记录管理（查重 / 覆盖 / 跳过 / 公司隔离） |
 | `backend/requirements.txt` | Python 依赖列表（fastapi、uvicorn、pandas、openpyxl 等） |
 | `data/users/` | 🔐 用户系统加密数据（用户 / 邀请码 / API Key / 公司） |
 | `data/uploads/` | 📂 上传临时文件（每 5 分钟自动清理超过 1 小时的文件） |
 | `data/输出/` | 📂 转换结果输出到这里（每 5 分钟自动清理过期文件） |
+| `data/.ai_secret` | 🔑 本地加解密密钥（勿提交 Git / 勿外传） |
+| `data/ai_config.json`、`data/ai_usage.json` | 旧版全局 AI Key / token 消耗数据（新版按账户存于 `data/users/`） |
 | `frontend/src/App.jsx` | 🖥️ React 主组件（登录守卫 + 3 步流程：上传 → 匹配 → 调整 → 下载） |
 | `frontend/src/AuthPage.jsx` | 🖥️ 登录 / 注册页（新注册公司 / 登录已有公司） |
 | `frontend/src/FluidBackground.jsx` | 🖥️ 登录页极光流体背景画布（极光幕帘 / 丁达尔光线 / 视差星云 / 星座 / 流星 / 流光拖尾） |
 | `frontend/src/magnetic.js` | 🖥️ 磁性吸附全局模块（所有可交互元素光标吸附） |
-| `frontend/src/effects/` | 🖥️ 高级动效模块（CountUp / CursorGlow / ScrollProgress / ripple / tilt） |
+| `frontend/src/effects/CountUp.jsx` | 🖥️ 数字滚动组件（数值变化平滑滚动） |
+| `frontend/src/effects/CursorGlow.jsx` | 🖥️ 光标追随柔光组件（弹簧缓动） |
+| `frontend/src/effects/ScrollProgress.jsx` | 🖥️ 页面顶部滚动进度指示器 |
+| `frontend/src/effects/ripple.js` | 🖥️ 点击涟漪特效模块（main.jsx 中初始化） |
+| `frontend/src/effects/tilt.js` | 🖥️ 3D 悬浮卡片特效模块（main.jsx 中初始化） |
 | `frontend/src/AdminPanel.jsx` | 🖥️ 用户管理页（邀请码 / 账号 / 公司数据库密码） |
 | `frontend/src/MappingLibrary.jsx` | 🖥️ 映射匹配库管理页面（增删改查 / 导入导出） |
 | `frontend/src/DuplicateConfirmModal.jsx` | 🖥️ 重复数据处理确认弹窗（覆盖 / 跳过 / 取消） |
@@ -626,10 +743,14 @@ python backend/main.py 表/参考.xlsx 表/客户表格.xlsx -o data/输出/结�
 | `frontend/src/App.css` | 🖥️ 网页样式 |
 | `frontend/vite.config.js` | 🖥️ Vite 配置（端口 3002 + `/api` 代理到后端 8004） |
 | `frontend/index.html` | 🖥️ 页面入口 |
+| `frontend/src/main.jsx` | 🖥️ React 入口（初始化磁性吸附 / 涟漪 / 3D 悬浮并挂载主界面） |
+| `frontend/package.json` | 🖥️ 前端依赖清单与 npm 脚本（dev / build / lint / preview） |
+| `frontend/.oxlintrc.json` | 🖥️ 前端 oxlint 代码检查规则 |
 | `表/` | 📂 放参考模板和待转换的原始表格 |
 | `工作日报/` | 📂 开发工作日报 |
 | `deploy/` | 📦 云服务器部署脚本（`deploy.sh` 一键部署 / `nginx.conf` / `table-converter.service` / `update.sh` 更新） |
 | `docs/部署/` | 📄 云服务器部署指南（含 Git 更新流程、私有仓库认证、排障） |
+| `docs/用户系统/需求分析.md` | 📄 用户系统需求分析文档（三级权限 / 邀请码 / 公司隔离设计） |
 | `.gitignore` | Git 忽略规则配置 |
 
 ---
