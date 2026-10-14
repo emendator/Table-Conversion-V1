@@ -63,13 +63,13 @@ def _auto_match(source_path: str, reference_path: str, use_ai: bool) -> list:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="表格转换工具 - 将客户原始表格转换为公司内部格式",
+        description="表格转换工具 - 将原始表格转换为统一模板格式",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python main.py 表/参考.xlsx 表/示例.xlsx                    单文件转换
-  python main.py 表/参考.xlsx 表/示例.xlsx 表/源表B.xls        批量转换
-  python main.py 表/参考.xlsx 表/示例.xlsx --no-ai            不用AI
+  python main.py 路径/参考模板.xlsx 路径/源表.xlsx                  单文件转换
+  python main.py 路径/参考模板.xlsx 路径/源表A.xlsx 路径/源表B.xlsx   批量转换
+  python main.py 路径/参考模板.xlsx 路径/源表.xlsx --no-ai          不用AI
   python main.py --set-api-key sk-xxx                         设置 DeepSeek API Key（加密存储）
         """
     )

@@ -698,7 +698,7 @@ function App() {
                         onDragOver={e => e.preventDefault()}
                         onDrop={e => { e.preventDefault(); handleRefUpload(e.dataTransfer.files[0]) }}>
                         <div className="upload-icon">📋</div>
-                        <p className="upload-title">参考模板（公司内部格式）</p>
+                        <p className="upload-title">参考模板（目标格式）</p>
                         <p className="upload-hint">拖拽文件到此处，或点击选择</p>
                         <p className="upload-formats">支持 .xlsx / .xls</p>
                         <p className="upload-format-tip">⚠️ 首行必须是无合并单元格的表头，否则列匹配可能不准</p>
