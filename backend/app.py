@@ -100,7 +100,7 @@ app.add_middleware(
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# 初始化内置最高级管理员（admin / ***REMOVED***，公司：***REMOVED***）
+# 初始化内置最高级管理员（凭据见 user_system：环境变量或首次随机生成）
 user_system.init_super_admin()
 
 # ============================================================

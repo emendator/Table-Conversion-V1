@@ -41,13 +41,14 @@ ROLE_MANAGER = "manager"
 ROLE_USER = "user"
 ROLES = (ROLE_ADMIN, ROLE_MANAGER, ROLE_USER)
 
-# 内置最高级管理员
+# 内置最高级管理员：用户名固定，口令与公司信息优先取环境变量，
+# 未设置时随机生成（仅在首次初始化时使用，并在启动日志中打印一次）。
 SUPER_ADMIN_USERNAME = "admin"
-SUPER_ADMIN_PASSWORD = "***REMOVED***"
-SUPER_ADMIN_COMPANY = "***REMOVED***"
+SUPER_ADMIN_PASSWORD = os.environ.get("TC_ADMIN_PASSWORD") or secrets.token_urlsafe(12)
+SUPER_ADMIN_COMPANY = os.environ.get("TC_ADMIN_COMPANY") or "默认公司"
 # 内置公司初始数据库密码：仅用于全新系统首次创建 admin 时的公司初始化，
 # admin 可随时在「用户管理 → 公司数据库密码」中修改；存量公司迁移时使用随机密码。
-SUPER_ADMIN_COMPANY_DB_PWD = "***REMOVED***"
+SUPER_ADMIN_COMPANY_DB_PWD = os.environ.get("TC_ADMIN_COMPANY_DB_PWD") or secrets.token_urlsafe(12)
 
 # 游客登录：无密码临时账号，退出登录（或令牌过期 / 服务重启）后自动清除全部使用痕迹
 GUEST_USERNAME_PREFIX = "__guest_"   # 游客用户名前缀（禁止注册同名）
@@ -336,7 +337,7 @@ def _is_expired(expires_at) -> bool:
 # ============================================================
 
 def init_super_admin() -> None:
-    """首次启动时创建内置最高级管理员 admin / ***REMOVED***（先迁移旧版数据）"""
+    """首次启动时创建内置最高级管理员（凭据来自环境变量或随机生成，先迁移旧版数据）"""
     with _lock:
         _migrate_legacy()
         users = _load_users()
@@ -357,6 +358,13 @@ def init_super_admin() -> None:
             })
             _save_users(users)
             _ensure_company_db(SUPER_ADMIN_COMPANY, SUPER_ADMIN_COMPANY_DB_PWD, SUPER_ADMIN_USERNAME)
+            print("=" * 62)
+            print("[初始化] 已创建内置最高级管理员，请立即登录并修改口令")
+            print(f"  用户名:        {SUPER_ADMIN_USERNAME}")
+            print(f"  密码:          {SUPER_ADMIN_PASSWORD}")
+            print(f"  公司:          {SUPER_ADMIN_COMPANY}")
+            print(f"  公司数据库密码: {SUPER_ADMIN_COMPANY_DB_PWD}")
+            print("=" * 62)
         else:
             # 存量数据迁移：为已有用户的公司补全 company_key 与公司数据库记录
             _backfill_company_dbs(users)
